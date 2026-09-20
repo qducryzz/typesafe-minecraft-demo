@@ -2,6 +2,8 @@
 
 An experimental Minecraft Java bot controlled through TypeSafe choices, with a live world view and the actual API input and output beside it.
 
+When this dashboard runs on the same machine as a dedicated Java 1.21.4 server and grok.me only embeds that page, follow **[docs/split-deploy.md](docs/split-deploy.md)** (Minecraft host vs grok.me shell).
+
 ## What TypeSafe controls
 
 The current dashboard uses **direct actions**: one API decision chooses one 250 ms movement pulse, a 30-degree turn, aim at an observed target, equip an item, mine one eligible block, place one eligible block, inspect, or wait. Mineflayer executes the selected primitive. The running loop does not call automatic pathfinding or batch mining/building.
