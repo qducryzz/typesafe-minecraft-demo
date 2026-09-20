@@ -159,7 +159,7 @@ async function startRun(token,fresh,buildTest=false){
   try{
     if(fresh){
       history=[];latest=null;count=0;task=null;if(camera==='overview')camera='third';
-      goal=buildTest?'BUILD TEST - materials supplied; mining skipped. Build and inspect the Canadian flag.':scenario.objective;
+      if(buildTest) goal='BUILD TEST - materials supplied; mining skipped. Build and inspect the Canadian flag.';
       status=scenario.id==='flag'?'Resetting flag and wool supply areas':'Starting a fresh task';broadcast();
       if(scenario.id==='flag'){
         const prepared=taskApi.createTask(bot);
