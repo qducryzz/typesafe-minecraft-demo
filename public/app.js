@@ -130,13 +130,50 @@ $('record').onclick=async()=>{
   }catch(error){stream?.getTracks().forEach(t=>t.stop());$('record-status').textContent=`Recording not started: ${error.message}`;}
 };
 
+async function copyText(text){
+  if(!text) return false;
+  try{
+    if(navigator.clipboard?.writeText && window.isSecureContext){
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  }catch{}
+  const ta=document.createElement('textarea');
+  ta.value=text;
+  ta.setAttribute('readonly','');
+  ta.style.cssText='position:fixed;top:0;left:-9999px;width:1px;height:1px;opacity:0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  ta.setSelectionRange(0, ta.value.length);
+  let ok=false;
+  try{ok=document.execCommand('copy');}catch{}
+  ta.remove();
+  return ok;
+}
+function selectPre(el){
+  const range=document.createRange();
+  range.selectNodeContents(el);
+  const sel=window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
 for(const [buttonId,sourceId] of [['copy-input','input-raw'],['copy-output','raw']]){
   const button=$(buttonId);
   button.onclick=async event=>{
     event.preventDefault();event.stopPropagation();
-    const text=$(sourceId).textContent;
-    try{await navigator.clipboard.writeText(text);button.textContent='Copied!';button.title='JSON copied to clipboard';}
-    catch(error){button.textContent='Copy failed';button.title='Clipboard access was denied. Expand the JSON and select it to copy manually.';}
-    clearTimeout(button.copyTimer);button.copyTimer=setTimeout(()=>{button.textContent='Copy';},1800);
+    const source=$(sourceId);
+    const text=source.textContent||'';
+    const ok=await copyText(text);
+    if(ok){
+      button.textContent='Copied!';
+      button.title='JSON copied to clipboard';
+    }else{
+      selectPre(source);
+      button.textContent='Selected';
+      button.title='Clipboard blocked in this preview. JSON is selected — press Ctrl+C / Cmd+C.';
+    }
+    clearTimeout(button.copyTimer);button.copyTimer=setTimeout(()=>{button.textContent='Copy';},2200);
   };
 }
+
