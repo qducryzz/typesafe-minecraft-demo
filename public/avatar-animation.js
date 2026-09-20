@@ -1,5 +1,6 @@
 /* global THREE */
 window.addEventListener('demo-viewer-ready',({detail:{viewer,socket}})=>{
+ window.__viewer=viewer;window.__socket=socket;
  let state={},lastPosition=null,walkingUntil=0,swingUntil=0;
  const textures=new Map();
  function texture(name,kind){const key=kind+'/'+name;if(!textures.has(key)){const t=new THREE.TextureLoader().load('textures/1.16.4/'+key+'.png');t.magFilter=THREE.NearestFilter;t.minFilter=THREE.NearestFilter;textures.set(key,t);}return textures.get(key);}

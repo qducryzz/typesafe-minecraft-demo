@@ -23,8 +23,12 @@ const { observe, point } = require('./observe.cjs');
 const { setTimeout: delay } = require('node:timers/promises');
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { path: '/view/socket.io' });
-const port = Number(process.env.PORT || 3010);
+const io = new Server(server, { path: '/view/socket.io', cors: { origin: true }, maxHttpBufferSize: 1e8 });
+const port = Number(process.env.PORT || 8080);
+const bind = process.env.BIND || '0.0.0.0';
+let mcHost = process.env.MC_HOST || '127.0.0.1';
+const mcPortDefault = Number(process.env.MC_PORT || 25565);
+const mcVersion = process.env.MC_VERSION || '1.21.4';
 const viewers = new Set();
 let bot, ready = false, running = false, generation = 0, controller, activeLoop = null, restarting = false;
 let goal = taskApi.OBJECTIVE, task = null;
@@ -32,19 +36,33 @@ let history = [], latest = null, count = 0, status = 'Waiting for Minecraft';
 fs.mkdirSync(path.join(__dirname,'../runtime'), { recursive: true });
 const logFile = path.join(__dirname, '../runtime', `decisions-${Date.now()}.jsonl`);
 const clients = new Set();
-let connecting = false, connectedPort = Number(process.env.MC_PORT || 25575);
-function snapshot() { return { controlMode:'direct', scenarios, scenario:scenario.id, actionLabels:Object.fromEntries(Object.keys(actionsFor({scenario:scenario.id,controlMode:'direct'})).map(k=>[k,k.replaceAll('_',' ')])), camera, restarting, busy:running||!!activeLoop, ready, running, status, goal, count, latest, gamePort:connectedPort, task:ready&&task?taskApi.progress(bot,task):null, position: ready ? point(bot.entity.position) : null, keyConfigured: !!process.env.TYPESAFE_API_KEY }; }
+let connecting = false, connectedPort = mcPortDefault;
+let typesafeKey = String(process.env.TYPESAFE_API_KEY || '').trim();
+let connectGeneration = 0, connectTimer = null;
+function snapshot() { return { controlMode:'direct', scenarios, scenario:scenario.id, actionLabels:Object.fromEntries(Object.keys(actionsFor({scenario:scenario.id,controlMode:'direct'})).map(k=>[k,k.replaceAll('_',' ')])), camera, restarting, busy:running||!!activeLoop, ready, running, status, goal, count, latest, gameHost:mcHost, gamePort:connectedPort, gameVersion:mcVersion, task:ready&&task?taskApi.progress(bot,task):null, position: ready ? point(bot.entity.position) : null, keyConfigured: !!typesafeKey }; }
 function broadcast() { const data = `data: ${JSON.stringify(snapshot())}\n\n`; for (const res of clients) res.write(data); }
 function pause(reason = 'Paused') { running = false; generation++; controller?.abort(); if(bot)lumber.cancel(bot); if(task && reason!=='Paused')task.finishedAt??=Date.now(); status = reason; broadcast(); }
+function allowedOrigin(req) {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try {
+    const o = new URL(origin);
+    const host = String(req.headers.host || '').split(':')[0];
+    if (['127.0.0.1', 'localhost'].includes(o.hostname)) return true;
+    if (host && o.hostname === host) return true;
+    if (o.hostname.endsWith('.grok.me') || o.hostname.endsWith('.grok.com')) return true;
+  } catch {}
+  return false;
+}
 app.use(express.json({ limit:'4kb' }));
 app.get('/api/state', (req,res) => res.json(snapshot()));
 app.get('/api/events', (req,res) => { res.set({'Content-Type':'text/event-stream','Cache-Control':'no-cache','Connection':'keep-alive'}); res.flushHeaders(); clients.add(res); res.write(`data: ${JSON.stringify(snapshot())}\n\n`); req.on('close',()=>clients.delete(res)); });
 app.post('/api/:action', (req,res) => {
-  if (req.headers.origin && req.headers.origin !== `http://127.0.0.1:${port}` && req.headers.origin !== `http://localhost:${port}`) return res.sendStatus(403);
+  if (!allowedOrigin(req)) return res.sendStatus(403);
   if(['restart','build-test'].includes(req.params.action)){
     const buildTest=req.params.action==='build-test';
     if(buildTest&&(scenario.id!=='flag'||process.env.FLAG_DEMO_RESET!=='1'))return res.status(409).json({error:'Build test requires Canadian Flag and the isolated reset adapter.'});
-    if(!ready||!process.env.TYPESAFE_API_KEY)return res.status(409).json({error:'Minecraft and a TypeSafe key must be ready.'});
+    if(!ready||!typesafeKey)return res.status(409).json({error:'Minecraft and a TypeSafe key must be ready.'});
     if(restarting||(running&&!task))return res.status(409).json({error:'A reset is already in progress.'});
     if(bot.game.gameMode!=='survival')return res.status(409).json({error:'This task requires Survival mode.'});
     const previous=activeLoop;
@@ -65,17 +83,35 @@ app.post('/api/:action', (req,res) => {
     if(bot?.pathfinder?.movements)bot.pathfinder.movements.canDig=scenario.id==='lumber';
     for(const socket of viewers)socket.data.updateCamera?.();status='Scenario selected. Press Start task.';broadcast();return res.json(snapshot());
   }
+  if (req.params.action === 'goal') {
+    const next=String(req.body?.goal||'').trim();
+    if(next.length<4)return res.status(400).json({error:'Enter a task objective.'});
+    if(running)return res.status(409).json({error:'Pause the task before changing the objective.'});
+    goal=next;status='Objective updated. Press Start task.';broadcast();return res.json(snapshot());
+  }
   if (req.params.action === 'pause') { pause(); return res.json(snapshot()); }
+  if (req.params.action === 'key') {
+    const key = String(req.body?.key || '').trim();
+    if (key.length < 8) return res.status(400).json({ error:'Paste a TypeSafe API key, then save.' });
+    typesafeKey = key;
+    if (ready && !running) status = 'Key saved. Press Start task.';
+    broadcast();
+    return res.json(snapshot());
+  }
   if (req.params.action === 'connect') {
     const gamePort = Number(req.body.port);
-    if (!Number.isInteger(gamePort) || gamePort < 1024 || gamePort > 65535) return res.status(400).json({error:'Enter the Minecraft LAN port (1024-65535).'});
-    if (running || activeLoop || connecting || ready) return res.status(409).json({error:'Pause and restart the demo before changing an active Minecraft connection.'});
-    connect(gamePort); return res.json(snapshot());
+    const host = String(req.body.host || mcHost).trim();
+    if (!host) return res.status(400).json({error:'Enter the Minecraft host.'});
+    if (!Number.isInteger(gamePort) || gamePort < 1024 || gamePort > 65535) return res.status(400).json({error:'Enter a Minecraft port (1024-65535).'});
+    if (running || activeLoop) pause('Switching Minecraft world');
+    connect(gamePort, host); return res.json(snapshot());
   }
   if (req.params.action !== 'start') return res.sendStatus(404);
-  if (!ready || !process.env.TYPESAFE_API_KEY) return res.status(409).json({ error:'Minecraft and a TypeSafe key must be ready.' });
+  if (!ready || !typesafeKey) return res.status(409).json({ error:'Minecraft and a TypeSafe key must be ready.' });
   if (running || activeLoop) return res.status(409).json({ error:'A run is already active or stopping.' });
   if(bot.game.gameMode !== 'survival')return res.status(409).json({error:'This task requires Survival mode so mined logs drop as items.'});
+  const nextGoal=String(req.body?.goal||'').trim();
+  if(nextGoal) goal=nextGoal;
   const fresh=shouldStartFresh(task,task?taskApi.progress(bot,task):null,scenario.budgetMs);
   running = true; status = fresh&&scenario.id==='flag'?'Resetting flag and wool supply areas':'Observing';
   const myGeneration = ++generation;
@@ -83,9 +119,12 @@ app.post('/api/:action', (req,res) => {
   broadcast(); res.json(snapshot());
 });
 const animatedViewerBundle=viewerBundle();
+const viewerPublic=path.join(path.dirname(require.resolve('prismarine-viewer')),'public');
 app.get('/view/index.js',(req,res)=>res.type('js').send(animatedViewerBundle));
-app.get('/view/',(req,res)=>res.type('html').send('<!doctype html><html><head><title>Minecraft viewer</title><style>html,body{margin:0;overflow:hidden}canvas{display:block}</style></head><body><script src="/avatar-animation.js"></script><script src="index.js"></script></body></html>'));
-app.use('/view', express.static(path.join(path.dirname(require.resolve('prismarine-viewer')), 'public')));
+app.get('/worker.js',(req,res)=>res.sendFile(path.join(viewerPublic,'worker.js')));
+app.use('/textures', express.static(path.join(viewerPublic,'textures')));
+app.use('/blocksStates', express.static(path.join(viewerPublic,'blocksStates')));
+app.use('/view', express.static(viewerPublic));
 app.use(express.static(path.join(__dirname, '../public')));
 
 function attachViewer(socket) {
@@ -95,7 +134,7 @@ function attachViewer(socket) {
   socket.emit('version', player.version);
   const world = new WorldView(player.world, 4, player.entity.position, socket);
   world.listenToBot(player);
-  world.init(player.entity.position).catch(() => {});
+  world.init(player.entity.position).then(()=>console.log('worldView init ok', player.entity.position)).catch((e)=>console.error('worldView init', e));
   let swing=false;
   const swung=()=>{swing=true;};
   const animation=()=>{socket.emit('avatar-state',{pos:player.entity.position,pitch:player.entity.pitch,heldItem:player.heldItem?.name||null,digging:!!player.targetDigBlock,swing});swing=false;};
@@ -124,7 +163,7 @@ async function startRun(token,fresh,buildTest=false){
       status=scenario.id==='flag'?'Resetting flag and wool supply areas':'Starting a fresh task';broadcast();
       if(scenario.id==='flag'){
         const prepared=taskApi.createTask(bot);
-        await resetFlag(bot,prepared,{port:connectedPort,host:process.env.MC_HOST||'127.0.0.1',buildTest});
+        await resetFlag(bot,prepared,{port:connectedPort,host:mcHost,buildTest});
       }
       if(!running||generation!==token||!ready)return;
       task=taskApi.createTask(bot);
@@ -156,7 +195,7 @@ async function loop(token) {
           state.direct=direct.observeDirect(bot,task);
           return state;
         },
-        decide:state=>decide(state,{key:process.env.TYPESAFE_API_KEY,model:process.env.TYPESAFE_MODEL||'jev-latest',signal:AbortSignal.any([controller.signal,AbortSignal.timeout(10000)])}),
+        decide:state=>decide(state,{key:typesafeKey,model:process.env.TYPESAFE_MODEL||'jev-latest',signal:AbortSignal.any([controller.signal,AbortSignal.timeout(10000)])}),
         position:()=>point(bot.entity.position),
         onServiceError:record=>{
           fs.appendFileSync(logFile,JSON.stringify({timestamp:new Date().toISOString(),...record})+'\n');
@@ -201,23 +240,66 @@ async function loop(token) {
   }
 }
 
-server.listen(port,'127.0.0.1',()=>console.log(`Demo: http://127.0.0.1:${port}`));
-function connect(gamePort = Number(process.env.MC_PORT || 25575)) {
+server.listen(port, bind, () => {
+  console.log(`Demo: http://${bind}:${port} -> ${mcHost}:${mcPortDefault} (${mcVersion})`);
+  if (process.env.MC_AUTOCONNECT !== '0') connect(mcPortDefault);
+});
+function connect(gamePort = mcPortDefault, host = mcHost) {
+  const token = ++connectGeneration;
+  const previous = bot;
   connecting = true;
+  ready = false;
+  mcHost = host;
   connectedPort=gamePort;task=null;
-  status = `Connecting to Minecraft on port ${gamePort}`;
-  const player = mineflayer.createBot({ host:process.env.MC_HOST || '127.0.0.1',port:gamePort,username:'TypeSafeExplorer',auth:'offline',version:process.env.MC_VERSION || false,hideErrors:true });
+  if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
+  status = `Connecting to Minecraft ${mcHost}:${gamePort}`;
+  broadcast();
+  if (previous) {
+    bot = null;
+    try { previous.quit(); } catch {}
+    for (const socket of [...viewers]) {
+      socket.data.attached = false;
+      socket.disconnect(true);
+    }
+  }
+  const player = mineflayer.createBot({ host:mcHost,port:gamePort,username:'TypeSafeExplorer',auth:'offline',version:mcVersion,hideErrors:true });
   bot = player;
+  connectTimer = setTimeout(() => {
+    if (connectGeneration !== token || bot !== player) return;
+    connecting = false;
+    ready = false;
+    bot = null;
+    status = `Could not reach ${mcHost}:${gamePort} in 25s. Confirm the Java server is up on that port.`;
+    broadcast();
+    try { player.end('connect-timeout'); } catch {}
+  }, 25000);
   player.loadPlugin(pathfinder);
   player.once('spawn',async () => {
-    try { await player.waitForChunksToLoad(); if (bot !== player) return; lumber.configure(player);player.pathfinder.movements.canDig=scenario.id==='lumber'; connecting = false; ready = true; status = 'Ready. Press Start task.'; for (const socket of viewers) attachViewer(socket); broadcast(); }
-    catch(error) { pause(error.message); }
+    try {
+      if (connectGeneration !== token || bot !== player) return;
+      if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
+      await player.waitForChunksToLoad();
+      if (bot !== player) return;
+      lumber.configure(player);player.pathfinder.movements.canDig=scenario.id==='lumber'; connecting = false; ready = true; const cols=player.world.getColumns?player.world.getColumns():[]; console.log('spawn chunks', Array.isArray(cols)?cols.length:Object.keys(cols||{}).length, 'pos', player.entity.position); status = 'Ready. Press Start task.'; for (const socket of viewers) attachViewer(socket); broadcast();
+    }
+    catch(error) { console.error('spawn error', error); pause(error.message); }
   });
-  player.on('error', error => { if(bot !== player)return; connecting = false; status = `Minecraft: ${error.code || error.message}`; broadcast(); });
-  player.on('kicked', () => { if(bot === player)pause('Minecraft disconnected the player. Check server log.'); });
+  player.on('error', error => { if(bot !== player)return; if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; } connecting = false; status = `Minecraft: ${error.code || error.message}`; broadcast(); });
+  player.on('kicked', (reason) => { if(bot === player)pause('Minecraft disconnected the player: '+String(reason).slice(0,180)); });
   player.on('death',()=>{if(bot === player)pause('Player died');});
-  player.on('end',()=>{ if(bot !== player)return; connecting = false; ready = false; pause('No Minecraft world connected. Enter the Java LAN port below.'); for(const socket of viewers) socket.disconnect(true); });
+  player.on('end',()=>{
+    if (bot !== player) return;
+    connecting = false;
+    ready = false;
+    if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
+    if (!String(status).startsWith('Could not reach') && !String(status).startsWith('Minecraft:')) {
+      pause(`Disconnected from ${mcHost}:${connectedPort}.`);
+    } else {
+      broadcast();
+    }
+    for(const socket of viewers) socket.disconnect(true);
+  });
 }
-status = 'No Minecraft world connected. Enter the Java LAN port below.';
+status = `Connecting to Minecraft ${mcHost}:${mcPortDefault}`;
 function shutdown() { pause('Shutting down'); bot?.quit(); io.close(); server.close(); setTimeout(()=>process.exit(0),500).unref(); }
 process.on('SIGINT',shutdown); process.on('SIGTERM',shutdown);
