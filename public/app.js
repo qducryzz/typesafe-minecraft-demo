@@ -41,8 +41,15 @@ function render(s) {
   $('scenario').value=s.scenario;
   $('scenario-info').textContent=s.scenarios.find(item=>item.id===s.scenario).description;
   if(document.activeElement!==$('goal')) $('goal').value=s.goal;
-  $('goal').readOnly=!!s.running;
-  $('apply-goal').disabled=!!s.running;
+  const freeGoal=s.controlMode==='direct';
+  $('goal').readOnly=!freeGoal||!!s.running;
+  $('apply-goal').disabled=!freeGoal||!!s.running;
+  $('goal-note').textContent=freeGoal
+    ?'Edit the objective, Apply, then Start. Pause first if a run is active.'
+    :'High-level mode uses the fixed scenario objective. Jev chooses harvest / pickup / explore / return home; Mineflayer pathfinds.';
+  $('mode-copy').textContent=s.controlMode==='direct'
+    ?'Direct control: one TypeSafe decision per short action.'
+    :'High-level: Jev picks a strategy; Mineflayer pathfinds and executes.';
   $('camera').disabled=!s.ready;$('camera').value=s.camera;
   $('camera').querySelector('[value="overview"]').disabled=s.scenario!=='flag'||!s.ready;
   const cameraLabel={third:'THIRD-PERSON FOLLOW',player:'FIRST-PERSON VIEW',overview:'OVERHEAD CAMERA'}[s.camera];
@@ -72,7 +79,7 @@ function render(s) {
   if(s.scenario!=='flag')$('task-progress').textContent=s.task?`${s.task.collected} / ${s.task.target} logs | ${s.task.homeDistance} blocks from home | ${s.task.remainingSeconds}s left`: 'Collect 10 logs, then return home. Five-minute limit.';
   $('task-meter').value=s.scenario==='flag'&&s.task?.stage==='gathering'?s.task.inventory.red_wool+s.task.inventory.white_wool:s.task?.collected||0;
   $('start').textContent=s.running?'Task running':s.task&&!s.task.finished&&!s.task.complete&&s.task.remainingSeconds>0?'Resume task':'Start task';
-  $('count').textContent=s.count;
+  $('count').textContent=s.decisionLimit?`${s.count} / ${s.decisionLimit}`:s.count;
   $('hud-goal').textContent=s.goal;
   $('empty').style.display=s.ready?'none':'flex';
   const connecting=String(s.status||'').toLowerCase().includes('connecting');

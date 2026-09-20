@@ -29,6 +29,7 @@ const bind = process.env.BIND || '0.0.0.0';
 let mcHost = process.env.MC_HOST || '127.0.0.1';
 const mcPortDefault = Number(process.env.MC_PORT || 25565);
 const mcVersion = process.env.MC_VERSION || '1.21.4';
+const controlMode = process.env.CONTROL_MODE === 'direct' ? 'direct' : 'highlevel';
 const viewers = new Set();
 let bot, ready = false, running = false, generation = 0, controller, activeLoop = null, restarting = false;
 let goal = taskApi.OBJECTIVE, task = null;
@@ -39,7 +40,8 @@ const clients = new Set();
 let connecting = false, connectedPort = mcPortDefault;
 let typesafeKey = String(process.env.TYPESAFE_API_KEY || '').trim();
 let connectGeneration = 0, connectTimer = null;
-function snapshot() { return { controlMode:'direct', scenarios, scenario:scenario.id, actionLabels:Object.fromEntries(Object.keys(actionsFor({scenario:scenario.id,controlMode:'direct'})).map(k=>[k,k.replaceAll('_',' ')])), camera, restarting, busy:running||!!activeLoop, ready, running, status, goal, count, latest, gameHost:mcHost, gamePort:connectedPort, gameVersion:mcVersion, task:ready&&task?taskApi.progress(bot,task):null, position: ready ? point(bot.entity.position) : null, keyConfigured: !!typesafeKey }; }
+function decisionLimit(){ return controlMode==='direct' ? 6000 : scenario.decisionLimit; }
+function snapshot() { return { controlMode, decisionLimit:decisionLimit(), scenarios, scenario:scenario.id, actionLabels:Object.fromEntries(Object.keys(actionsFor({scenario:scenario.id,controlMode})).map(k=>[k,k.replaceAll('_',' ')])), camera, restarting, busy:running||!!activeLoop, ready, running, status, goal, count, latest, gameHost:mcHost, gamePort:connectedPort, gameVersion:mcVersion, task:ready&&task?taskApi.progress(bot,task):null, position: ready ? point(bot.entity.position) : null, keyConfigured: !!typesafeKey }; }
 function broadcast() { const data = `data: ${JSON.stringify(snapshot())}\n\n`; for (const res of clients) res.write(data); }
 function pause(reason = 'Paused') { running = false; generation++; controller?.abort(); if(bot)lumber.cancel(bot); if(task && reason!=='Paused')task.finishedAt??=Date.now(); status = reason; broadcast(); }
 function allowedOrigin(req) {
@@ -84,6 +86,7 @@ app.post('/api/:action', (req,res) => {
     for(const socket of viewers)socket.data.updateCamera?.();status='Scenario selected. Press Start task.';broadcast();return res.json(snapshot());
   }
   if (req.params.action === 'goal') {
+    if(controlMode!=='direct')return res.status(409).json({error:'High-level mode uses the fixed scenario objective.'});
     const next=String(req.body?.goal||'').trim();
     if(next.length<4)return res.status(400).json({error:'Enter a task objective.'});
     if(running)return res.status(409).json({error:'Pause the task before changing the objective.'});
@@ -110,8 +113,12 @@ app.post('/api/:action', (req,res) => {
   if (!ready || !typesafeKey) return res.status(409).json({ error:'Minecraft and a TypeSafe key must be ready.' });
   if (running || activeLoop) return res.status(409).json({ error:'A run is already active or stopping.' });
   if(bot.game.gameMode !== 'survival')return res.status(409).json({error:'This task requires Survival mode so mined logs drop as items.'});
-  const nextGoal=String(req.body?.goal||'').trim();
-  if(nextGoal) goal=nextGoal;
+  if(controlMode==='direct'){
+    const nextGoal=String(req.body?.goal||'').trim();
+    if(nextGoal) goal=nextGoal;
+  } else {
+    goal=scenario.objective;
+  }
   const fresh=shouldStartFresh(task,task?taskApi.progress(bot,task):null,scenario.budgetMs);
   running = true; status = fresh&&scenario.id==='flag'?'Resetting flag and wool supply areas':'Observing';
   const myGeneration = ++generation;
@@ -160,6 +167,7 @@ async function startRun(token,fresh,buildTest=false){
     if(fresh){
       history=[];latest=null;count=0;task=null;if(camera==='overview')camera='third';
       if(buildTest) goal='BUILD TEST - materials supplied; mining skipped. Build and inspect the Canadian flag.';
+      else if(controlMode!=='direct') goal=scenario.objective;
       status=scenario.id==='flag'?'Resetting flag and wool supply areas':'Starting a fresh task';broadcast();
       if(scenario.id==='flag'){
         const prepared=taskApi.createTask(bot);
@@ -178,21 +186,23 @@ async function startRun(token,fresh,buildTest=false){
 }
 async function loop(token) {
   try {
-    while (running && generation === token && count < 6000) {
+    while (running && generation === token && count < decisionLimit()) {
       const progress = taskApi.progress(bot,task);
       const stop = taskApi.stopReason(progress,task);
       if(stop){if(progress.complete&&scenario.id==='flag'){camera='overview';for(const socket of viewers)socket.data.updateCamera?.();}pause(stop);break;}
       if(bot.health<8)throw new Error('Stopped: health is low');
       status = 'TypeSafe is deciding'; broadcast();
       controller = new AbortController();
+      const limit=decisionLimit();
       const fresh=await decideFresh({
         signal:controller.signal,
-        isActive:()=>running&&generation===token&&ready&&count<6000,
+        isActive:()=>running&&generation===token&&ready&&count<limit,
         observe:()=>{
           const state=observe(bot,goal,history);
-          state.scenario=scenario.id;state.controlMode='direct';
+          state.scenario=scenario.id;state.controlMode=controlMode;
           state.task={...taskApi.progress(bot,task),setupMode:task.setupMode||'normal'};
-          state.direct=direct.observeDirect(bot,task);
+          if(controlMode==='direct') state.direct=direct.observeDirect(bot,task);
+          else state.candidates=taskApi.candidates(bot,task);
           return state;
         },
         decide:state=>decide(state,{key:typesafeKey,model:process.env.TYPESAFE_MODEL||'jev-latest',signal:AbortSignal.any([controller.signal,AbortSignal.timeout(10000)])}),
@@ -215,7 +225,9 @@ async function loop(token) {
       latest = { id:count, timestamp:new Date().toISOString(), state, ...result, freshness, outcome:'Executing' };
       status = `Executing ${result.answer.choice}`; broadcast();
       const actionSignal = AbortSignal.any([controller.signal,AbortSignal.timeout(Math.max(1,Math.min(scenario.actionMs,scenario.budgetMs-Date.now()+task.startedAt)))]);
-      const outcome = await direct.execute(bot,task,result.answer.choice,state.direct,actionSignal);
+      const outcome = controlMode==='direct'
+        ? await direct.execute(bot,task,result.answer.choice,state.direct,actionSignal)
+        : await taskApi.executeTask(bot,task,result.answer.choice,state.candidates,actionSignal);
       const end = point(bot.entity.position);
       const moved = Math.hypot(end.x-state.position.x,end.z-state.position.z);
       latest.outcome = outcome;
@@ -228,7 +240,7 @@ async function loop(token) {
       broadcast();
       await delay(100);
     }
-    if (generation === token) pause(`Stopped: 6000-decision limit reached`);
+    if (generation === token) pause(`Stopped: ${decisionLimit()}-decision limit reached`);
   } catch (error) {
     if(latest?.outcome==='Executing') {
       latest.outcome=generation===token?`Stopped: ${error.message}`:'Cancelled';
@@ -241,7 +253,7 @@ async function loop(token) {
 }
 
 server.listen(port, bind, () => {
-  console.log(`Demo: http://${bind}:${port} -> ${mcHost}:${mcPortDefault} (${mcVersion})`);
+  console.log(`Demo: http://${bind}:${port} -> ${mcHost}:${mcPortDefault} (${mcVersion}) control=${controlMode}`);
   if (process.env.MC_AUTOCONNECT !== '0') connect(mcPortDefault);
 });
 function connect(gamePort = mcPortDefault, host = mcHost) {
