@@ -1,3 +1,4 @@
+const {audit}=require('./trace.cjs');
 const actions={
  forward:'Hold forward for 250 milliseconds. No automatic steering.',
  backward:'Hold backward for 250 milliseconds.',
@@ -23,35 +24,39 @@ const actions={
 
 function availableActions(state) {
  if(!state.direct)return actions;
- return Object.fromEntries(Object.entries(actions).filter(([name])=>{
+ const report=audit('direct-actions');
+ const result=Object.fromEntries(Object.entries(actions).filter(([name])=>{
+  const deny=reason=>report.reject(name,reason);
   const d=state.direct;
   const stage=state.task?.stage;
-  if(stage==='gathering'&&(name==='place'||name==='inspect_flag'||name.startsWith('aim_place_')||name==='equip_red_wool'||name==='equip_white_wool'))return false;
-  if(['building','inspect','complete'].includes(stage)&&(name==='mine'||name==='equip_shears'||name.startsWith('aim_mine_')||name.startsWith('aim_drop_')))return false;
-  if(d.movementSafe?.[name]===false)return false;
-  if(name==='mine'&&d.canMine===false)return false;
-  if(name==='place'&&d.canPlace===false)return false;
-  if(name==='inspect_flag'&&d.canInspect===false)return false;
-  if(name.startsWith('equip_')&&d.heldItem===name.slice(6))return false;
-  if(name==='equip_shears'&&state.task?.stage==='building')return false;
+  if(stage==='gathering'&&(name==='place'||name==='inspect_flag'||name.startsWith('aim_place_')||name==='equip_red_wool'||name==='equip_white_wool'))return deny("stage==='gathering'&&(name==='place'||name==='inspect_flag'||name.startsWith('aim_place_')||name==='equip_red_wool'||name==='equip_white_wool')");
+  if(['building','inspect','complete'].includes(stage)&&(name==='mine'||name==='equip_shears'||name.startsWith('aim_mine_')||name.startsWith('aim_drop_')))return deny("['building','inspect','complete'].includes(stage)&&(name==='mine'||name==='equip_shears'||name.startsWith('aim_mine_')||name.startsWith('aim_drop_'))");
+  if(d.movementSafe?.[name]===false)return deny("d.movementSafe?.[name]===false");
+  if(name==='mine'&&d.canMine===false)return deny("name==='mine'&&d.canMine===false");
+  if(name==='place'&&d.canPlace===false)return deny("name==='place'&&d.canPlace===false");
+  if(name==='inspect_flag'&&d.canInspect===false)return deny("name==='inspect_flag'&&d.canInspect===false");
+  if(name.startsWith('equip_')&&d.heldItem===name.slice(6))return deny("name.startsWith('equip_')&&d.heldItem===name.slice(6)");
+  if(name==='equip_shears'&&state.task?.stage==='building')return deny("name==='equip_shears'&&state.task?.stage==='building'");
   if(name==='equip_red_wool'||name==='equip_white_wool'){
-   if(state.task?.stage==='gathering')return false;
-   if(state.task?.inventory?.[name.slice(6)]===0)return false;
+   if(state.task?.stage==='gathering')return deny("state.task?.stage==='gathering'");
+   if(state.task?.inventory?.[name.slice(6)]===0)return deny("state.task?.inventory?.[name.slice(6)]===0");
   }
   if(name.startsWith('aim_mine_')||name.startsWith('aim_place_')){
    const mining=name.startsWith('aim_mine_'),list=mining?d.miningTargets:d.placementTargets;
    if(!list)return true;
-   const target=list[Number(name.slice(-1))];if(!target)return false;
-   if(!mining&&target.blockedByPlayer)return false;
-   if(!mining&&target.alreadyAimed)return false;
-   if(!mining&&target.visible===false&&target.distance<=4.5)return false;
-   if(mining&&d.canMine&&d.crosshair?.position&&Object.keys(target.position).every(k=>target.position[k]===d.crosshair.position[k]))return false;
-   if(!mining&&d.canPlace)return false;
-   if(!mining&&d.aimedPlacement&&Object.keys(target.position).every(k=>target.position[k]===d.aimedPlacement.position[k]))return false;
+   const target=list[Number(name.slice(-1))];if(!target)return deny("!target");
+   if(!mining&&target.blockedByPlayer)return deny("!mining&&target.blockedByPlayer");
+   if(!mining&&target.alreadyAimed)return deny("!mining&&target.alreadyAimed");
+   if(!mining&&target.visible===false&&target.distance<=4.5)return deny("!mining&&target.visible===false&&target.distance<=4.5");
+   if(mining&&d.canMine&&d.crosshair?.position&&Object.keys(target.position).every(k=>target.position[k]===d.crosshair.position[k]))return deny("mining&&d.canMine&&d.crosshair?.position&&Object.keys(target.position).every(k=>target.position[k]===d.crosshair.position[k])");
+   if(!mining&&d.canPlace)return deny("!mining&&d.canPlace");
+   if(!mining&&d.aimedPlacement&&Object.keys(target.position).every(k=>target.position[k]===d.aimedPlacement.position[k]))return deny("!mining&&d.aimedPlacement&&Object.keys(target.position).every(k=>target.position[k]===d.aimedPlacement.position[k])");
   }
   if(!name.startsWith('aim_drop_'))return true;
   const drop=state.direct.drops?.[Number(name.slice(-1))];
-  return drop && !(drop.forward>0 && Math.abs(Math.atan2(drop.right,drop.forward))<=Math.PI/18);
+  if(!drop)return deny('drop-absent');
+  if(drop.forward>0 && Math.abs(Math.atan2(drop.right,drop.forward))<=Math.PI/18)return deny('drop-already-ahead');
+  return true;
  }).map(([name,description])=>{
   const step={forward:[1,0],backward:[-1,0],left:[0,-1],right:[0,1],jump_forward:[1,0]}[name];
   const d=state.direct,target=d.placementTargets?.[0];
@@ -59,6 +64,7 @@ function availableActions(state) {
   const before=Math.hypot(target.forward,target.right),after=Math.hypot(target.forward-step[0],target.right-step[1]);
   return [name,{action:description,target:'direct.placementTargets[0]',currentHorizontalDistance:+before.toFixed(2),estimatedHorizontalDistanceAfterPulse:+after.toFixed(2),effect:after<before?'closer to the nearest remaining gap':'farther from the nearest remaining gap',limitation:'Estimate for a roughly one-block pulse, not a route or a prediction of collisions, momentum or visibility.'}];
  }));
+ report.finish({offered:Object.keys(result)});return result;
 }
 const phaseInstructions=`Choose one useful Minecraft control action. Every movement, aim, equip, mine and placement needs your separate choice. Code supplies observations and a fixed blueprint, not navigation. Use only offered choices.
 

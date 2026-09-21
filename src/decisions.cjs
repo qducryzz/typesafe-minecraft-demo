@@ -1,3 +1,5 @@
+const {trace}=require('./trace.cjs');
+const {randomUUID}=require('node:crypto');
 const actions = {
   harvest_nearest: 'Navigate to and mine candidates.logs[0], when more logs are needed.',
   harvest_alternative: 'Navigate to and mine candidates.logs[1], when the first target is unsuitable or recently failed.',
@@ -38,21 +40,29 @@ function validateAnswer(response, allowed = actions) {
   return answer;
 }
 
-async function decide(state, { key, model, signal, fetchImpl = fetch }) {
+async function decide(state, { key, model, signal, fetchImpl = fetch, requestId=trace.context().requestId||randomUUID() }) {
   if (!key) throw new Error('TYPESAFE_API_KEY is missing. Restart using scripts/start-demo.ps1.');
+  return trace.run({requestId},async()=>{
   const request = requestFor(state, model);
+  trace.addSecret(key);
+  trace.event('request.sent',{request});
+  try {
   const started = performance.now();
   const response = await fetchImpl('https://api.typesafe.ai/v1/systemone', {
     method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: JSON.stringify(request), signal
   });
+  trace.event('response.status',{httpStatus:response.status});
   if (!response.ok) {
     const error=new Error(`TypeSafe HTTP ${response.status}`);
     error.status=response.status;
     throw error;
   }
   const raw = await response.json();
+  trace.event('response.received',{raw});
   return { request, answer: validateAnswer(raw, actionsFor(state)), raw, latencyMs: Math.round(performance.now() - started) };
+  } catch(error) {trace.event('request.error',{error});throw error;}
+  });
 }
 
 function isFresh(observed, current, elapsedMs) {

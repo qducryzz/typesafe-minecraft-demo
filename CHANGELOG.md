@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Link atomic-controller summaries and traces by archive IDs
+
+- Add schema-v2 manifests with shared session-based filenames, explicit summary-to-trace references and run/decision/observation/request/tool IDs. Preserve separate retry/discard rows and one terminal record per round, including failures before inference and cancelled actions.
+- Add the archive reader and Chinese reference while preserving direct-only actions, the 6,000-decision cap and existing bot identity. Test servers use temporary archive directories and disable automatic Minecraft connections. Historical logs are not rewritten.
+- Validation: all 91 offline/HTTP tests pass; documentation sync/check and whitespace checks pass. Includes archive joins, cancellation, retry IDs, incomplete-round queries, direct-mode/identity preservation and secret redaction. No live model calls or gameplay were run.
+
+### Add correlated diagnostic traces
+
+- Add private, per-process `trace-*.jsonl` files with session/run/decision/request/span IDs. Record connection lifecycle, controls, task start/resume/pause/stop, setup, observations, API failures/retries, tool starts/results/errors, fatal exceptions and graceful shutdown. Flush start events before requests and execution; redact configured credentials and omit control bodies.
+- Record direct terrain checks, target ranking, blueprint/supply filtering and excluded actions. Explicitly label direct observations as no-pathfinding; preserve atomic behavior. README documents coverage and force-kill/storage limits.
+- Validation: 81 offline/HTTP tests pass; documentation sync/check pass. Includes real local HTTP connection-error/shutdown tests and synthetic cancellation, malformed-response and secret-redaction checks. No live API calls or completed gameplay were used for validation.
+
 ### Publish the direct-control demo
 
 - The recorded final controller run completed mining, collection, all 338 placements and inspection in 1,848 decisions and 13m21s. No maintenance pause or manual gameplay intervention was needed; one service error recovered automatically. Updated README verification to match the reviewed recording. Earlier entries below retain their validation limits at the time.

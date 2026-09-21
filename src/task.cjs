@@ -1,3 +1,4 @@
+const {trace}=require('./trace.cjs');
 const { Vec3 } = require('vec3');
 const { Movements, goals } = require('mineflayer-pathfinder');
 const { point } = require('./observe.cjs');
@@ -36,7 +37,7 @@ const v = p => new Vec3(p.x,p.y,p.z);
 const harvestGoal = (bot,p) => new goals.GoalLookAtBlock(v(p),bot.world,{reach:4.0});
 function candidates(bot, task) {
   const available = p => !task.failed[`${p.x},${p.y},${p.z}`] || Date.now()-task.failed[`${p.x},${p.y},${p.z}`]>45000;
-  const reachable = goal => bot.pathfinder.getPathTo(bot.pathfinder.movements,goal,100).status==='success';
+  const reachable = goal => {trace.event('path.search.start',{legacy:true,target:goal.pos||{x:goal.x,y:goal.y,z:goal.z}});const result=bot.pathfinder.getPathTo(bot.pathfinder.movements,goal,100);trace.event('path.search.end',{legacy:true,status:result.status,time:result.time,visitedNodes:result.visitedNodes,pathLength:result.path?.length});return result.status==='success';};
   const logs = bot.findBlocks({matching:b=>LOG.test(b.name),maxDistance:24,count:24}).filter(available)
     .filter(p=>!(Math.floor(bot.entity.position.x)===p.x&&Math.floor(bot.entity.position.z)===p.z&&p.y<bot.entity.position.y))
     .sort((a,b)=>distance(a,bot.entity.position)-distance(b,bot.entity.position));
@@ -80,6 +81,7 @@ async function executeTask(bot,task,choice,seen,signal) {
       await new Promise(r=>setTimeout(r,500));return `mined ${block.name}; inventory verifies collection`;
     });
   } catch(error) {
+    trace.event('tool.internal-error',{choice,target,error,cancelled:signal.aborted});
     if(target) task.failed[`${Math.floor(target.x)},${Math.floor(target.y)},${Math.floor(target.z)}`]=Date.now();
     if(signal.aborted)throw error;
     return `action failed: ${error.message}`;
