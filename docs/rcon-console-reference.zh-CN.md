@@ -33,7 +33,7 @@ RCON_PASSWORD=replace-with-your-password
 - 每次执行一条命令，不支持多行批量输入。点击「执行命令」或按 `Ctrl+Enter` 提交。
 - `<x>`、`<y>`、`<z>` 等尖括号表示必须替换的参数，不要原样输入。
 - 帮助中的 `[参数]` 表示可选，`a|b` 表示二选一，不需要输入方括号或竖线。
-- 本项目机器人的游戏名为 `TypeSafeExplorer`。涉及实体查询、传送或给予物品时，目标玩家必须在线。
+- main 会按本机网卡 MAC 摘要自动生成 `TypeSafeBot` 加 5 位标识的名字，并显示在游戏连接区及 RCON 面板。以下 `TypeSafeBotA1B2C` 仅为示例，手动命令请替换为面板显示的真实名字；快捷查询会自动使用本机机器人名字。涉及实体查询、传送或给予物品时，目标玩家必须在线。
 - RCON 是服务器控制台，没有你的游戏角色身份。涉及坐标或玩家时优先明确填写目标与绝对坐标，避免误用 `@s` 或相对坐标。
 - 「已收到服务器响应」只代表收到文本。未知命令、目标不存在等错误也可能是正常响应，必须阅读输出内容。
 
@@ -44,8 +44,8 @@ RCON_PASSWORD=replace-with-your-password
 | 按钮 | 实际命令 | 返回内容 |
 | --- | --- | --- |
 | 在线玩家 | `list` | 在线玩家数量和名称 |
-| 机器人坐标 | `data get entity TypeSafeExplorer Pos` | 机器人的 X、Y、Z 坐标 |
-| 机器人背包 | `data get entity TypeSafeExplorer Inventory` | 机器人背包数据 |
+| 机器人坐标 | `data get entity TypeSafeBotA1B2C Pos` | 机器人的 X、Y、Z 坐标 |
+| 机器人背包 | `data get entity TypeSafeBotA1B2C Inventory` | 机器人背包数据 |
 | 世界时间 | `time query daytime` | 当前昼夜周期中的游戏刻数 |
 | 世界种子 | `seed` | 当前世界种子 |
 
@@ -59,7 +59,7 @@ RCON_PASSWORD=replace-with-your-password
 | 查看传送用法 | `help teleport` | 查看当前版本的参数格式 |
 | 查看实体数据用法 | `help data` | 查看实体或方块数据相关语法 |
 | 在线玩家及 UUID | `list uuids` | 排查玩家身份与在线状态 |
-| 机器人生命值 | `data get entity TypeSafeExplorer Health` | 读取生命值数据 |
+| 机器人生命值 | `data get entity TypeSafeBotA1B2C Health` | 读取生命值数据 |
 | 服务器游戏刻状态 | `tick query` | 查询游戏刻运行状态 |
 | 当前难度 | `difficulty` | 不带设置参数时查询难度 |
 | 背包保留规则 | `gamerule keepInventory` | 不带新值时查询规则 |
@@ -67,7 +67,7 @@ RCON_PASSWORD=replace-with-your-password
 
 常见现象：
 
-- `list` 中没有 `TypeSafeExplorer`：先在 dashboard 的 Minecraft backend 中连接游戏服务器。
+- `list` 中没有 `TypeSafeBotA1B2C`：先在 dashboard 的 Minecraft backend 中连接游戏服务器。
 - `data get entity ...` 提示找不到实体：检查机器人是否在线、名字是否正确，以及执行所在维度是否适用。
 - 命令在当前版本语法不同：使用 `help <命令名>` 查询，不要反复提交修改世界的命令试错。
 
@@ -77,10 +77,10 @@ RCON_PASSWORD=replace-with-your-password
 
 | 用途 | 命令 | 影响 |
 | --- | --- | --- |
-| 传送机器人 | `tp TypeSafeExplorer <x> <y> <z>` | 将机器人移动到指定坐标；先确认落点和维度 |
-| 切换生存模式 | `gamemode survival TypeSafeExplorer` | Lumber Run 启动要求生存模式 |
-| 切换创造模式 | `gamemode creative TypeSafeExplorer` | 可用于人工调试，但不能直接启动正常 Lumber Run |
-| 给予一把铁斧 | `give TypeSafeExplorer minecraft:iron_axe 1` | 向机器人背包加入工具 |
+| 传送机器人 | `tp TypeSafeBotA1B2C <x> <y> <z>` | 将机器人移动到指定坐标；先确认落点和维度 |
+| 切换生存模式 | `gamemode survival TypeSafeBotA1B2C` | Lumber Run 启动要求生存模式 |
+| 切换创造模式 | `gamemode creative TypeSafeBotA1B2C` | 可用于人工调试，但不能直接启动正常 Lumber Run |
+| 给予一把铁斧 | `give TypeSafeBotA1B2C minecraft:iron_axe 1` | 向机器人背包加入工具 |
 | 设置白天 | `time set day` | 改变世界时间 |
 | 设置晴天 | `weather clear` | 改变天气 |
 | 调整为和平难度 | `difficulty peaceful` | 修改世界难度 |
@@ -91,7 +91,7 @@ RCON_PASSWORD=replace-with-your-password
 例如，给予机器人一把铁斧：
 
 ```text
-give TypeSafeExplorer minecraft:iron_axe 1
+give TypeSafeBotA1B2C minecraft:iron_axe 1
 ```
 
 执行后可点击「机器人背包」核对实际结果。

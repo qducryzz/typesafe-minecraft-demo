@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {trace}=require('./trace.cjs');
+const {resolveBotIdentity}=require('./bot-identity.cjs');
 const {createRconConsole,installRconRoutes}=require('./rcon-console.cjs');
 const {randomUUID}=require('node:crypto');
 let activeRunId=null,currentConnectionId=null;
@@ -8,6 +9,8 @@ trace.configure({directory:process.env.TRACE_DIR||path.join(__dirname,'../runtim
 trace.event('process.start',{nodeVersion:process.version});
 process.on('uncaughtExceptionMonitor',(error,origin)=>trace.event('process.fatal',{error,origin}));
 process.on('exit',code=>trace.event('process.exit',{code}));
+const {username:botUsername}=resolveBotIdentity();
+trace.event('bot.identity',{botUsername,source:'mac'});
 const http = require('node:http');
 const express = require('express');
 const { Server } = require('socket.io');
@@ -48,9 +51,9 @@ const clients = new Set();
 let connecting = false, connectedPort = mcPortDefault;
 let typesafeKey = String(process.env.TYPESAFE_API_KEY || '').trim();
 let connectGeneration = 0, connectTimer = null;
-const rconConsole=createRconConsole({defaultHost:()=>mcHost,isTaskBusy:()=>running||!!activeLoop,onChange:()=>broadcast()});
+const rconConsole=createRconConsole({botUsername,defaultHost:()=>mcHost,isTaskBusy:()=>running||!!activeLoop,onChange:()=>broadcast()});
 function decisionLimit(){ return controlMode==='direct' ? 6000 : scenario.decisionLimit; }
-function snapshot() { return { controlMode, decisionLimit:decisionLimit(), scenarios, scenario:scenario.id, actionLabels:Object.fromEntries(Object.keys(actionsFor({scenario:scenario.id,controlMode})).map(k=>[k,k.replaceAll('_',' ')])), camera, restarting, busy:running||!!activeLoop, ready, running, status, goal, count, latest, gameHost:mcHost, gamePort:connectedPort, gameVersion:mcVersion, task:ready&&task?taskApi.progress(bot,task):null, position: ready ? point(bot.entity.position) : null, keyConfigured: !!typesafeKey }; }
+function snapshot() { return { botUsername,controlMode, decisionLimit:decisionLimit(), scenarios, scenario:scenario.id, actionLabels:Object.fromEntries(Object.keys(actionsFor({scenario:scenario.id,controlMode})).map(k=>[k,k.replaceAll('_',' ')])), camera, restarting, busy:running||!!activeLoop, ready, running, status, goal, count, latest, gameHost:mcHost, gamePort:connectedPort, gameVersion:mcVersion, task:ready&&task?taskApi.progress(bot,task):null, position: ready ? point(bot.entity.position) : null, keyConfigured: !!typesafeKey }; }
 function broadcast() { const data = `data: ${JSON.stringify(snapshot())}\n\n`; for (const res of clients) res.write(data); }
 function pause(reason = 'Paused') { trace.event(reason==='Paused'?'task.pause':'task.stop',{reason,count,position:bot?.entity?.position?point(bot.entity.position):null}); running = false; generation++; controller?.abort(); if(bot)lumber.cancel(bot); if(task && reason!=='Paused')task.finishedAt??=Date.now(); status = reason; broadcast(); }
 function allowedOrigin(req) {
@@ -202,7 +205,7 @@ async function startRun(token,fresh,buildTest=false){
       status=scenario.id==='flag'?'Resetting flag and wool supply areas':'Starting a fresh task';broadcast();
       if(scenario.id==='flag'){
         const prepared=taskApi.createTask(bot);
-        await trace.span('setup.reset',{buildTest},()=>resetFlag(bot,prepared,{port:connectedPort,host:mcHost,buildTest}));
+        await trace.span('setup.reset',{buildTest},()=>resetFlag(bot,prepared,{port:connectedPort,host:mcHost,buildTest,expectedUsername:botUsername}));
       }
       if(!running||generation!==token||!ready)return;
       task=taskApi.createTask(bot);
@@ -327,7 +330,7 @@ function connect(gamePort = mcPortDefault, host = mcHost) {
     }
   }
   let player;
-  try {player = mineflayer.createBot({ host:mcHost,port:gamePort,username:'TypeSafeExplorer',auth:'offline',version:mcVersion,hideErrors:true });}
+  try {player = mineflayer.createBot({ host:mcHost,port:gamePort,username:botUsername,auth:'offline',version:mcVersion,hideErrors:true });}
   catch(error){trace.event('connection.error',{connectionId,phase:'create',error});throw error;}
   bot = player;
   for(const event of ['path_update','path_reset','path_stop','goal_reached'])player.on(event,result=>{

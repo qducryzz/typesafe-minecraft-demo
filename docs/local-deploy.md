@@ -51,7 +51,7 @@ node --env-file=.env src/server.cjs
 
 Open the printed URL. Status should become Ready. Lumber objective stays fixed.
 
-Java server: `1.21.4`, `online-mode=false`, Survival, Peaceful, bot name `TypeSafeExplorer` on solid ground near trees. Full host notes: [split-deploy.md](split-deploy.md).
+Java server: `1.21.4`, `online-mode=false`, Survival, Peaceful. The bot name is generated from the host's network adapter MAC digest as `TypeSafeBot` plus five characters; use the name shown by the dashboard. Prepare solid ground near trees for that player. Full host notes: [split-deploy.md](split-deploy.md).
 
 ## Public URL later
 

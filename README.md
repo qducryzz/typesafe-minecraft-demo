@@ -40,7 +40,7 @@ The origin is FLAG_ORIGIN=x,y,z, otherwise relative to the starting position. Th
 
 Run node scripts/flag-demo-commands.cjs to print preparation commands. These clear the named disposable site, including both supply areas. This is operator setup, not model activity.
 
-Automatic replay requires FLAG_DEMO_RESET=1, FLAG_ORIGIN=64,64,64, the TypeSafeExplorer bot and a loopback server on port 25576 consuming runtime/server-command.txt. The public scripts/run-managed-server.cjs provides that mailbox for an already configured runtime/survival server, checks explicit EULA acceptance, and uses JAVA_BIN or java. Do not run a second wrapper against an active world. Other hosts, ports, origins and player names are rejected.
+Automatic replay requires FLAG_DEMO_RESET=1, FLAG_ORIGIN=64,64,64, this instance's generated bot identity and a loopback server on port 25576 consuming runtime/server-command.txt. The public scripts/run-managed-server.cjs provides that mailbox for an already configured runtime/survival server, checks explicit EULA acceptance, and uses JAVA_BIN or java. Do not run a second wrapper against an active world. Other hosts, ports, origins and player names are rejected. The operator command generator uses the same local identity as the dashboard.
 
 ## Current verification
 
@@ -100,7 +100,15 @@ powershell -NoProfile -File scripts/start-demo.ps1
 
 On other systems, with the key already exported, run `npm start`. Alternatively, copy `.env.example` to `.env`, enter your key locally, and run `node --env-file=.env src/server.cjs`. Never commit that file. `npm start` does not load `.env` automatically.
 
-Open [the dashboard](http://127.0.0.1:3010). Open a Java world to LAN, enter the port shown in Minecraft chat, and click **Connect**. The bot uses the local offline identity `TypeSafeExplorer`; servers requiring account authentication need additional integration. Launcher credentials are never extracted.
+Open [the dashboard](http://127.0.0.1:3010). Open a Java world to LAN, enter the port shown in Minecraft chat, and click **Connect**. The bot uses an automatically generated offline identity `TypeSafeBot` plus five uppercase base-36 characters derived from a network adapter MAC digest. The full name is shown below the game connection controls and in the RCON panel. Servers requiring account authentication need additional integration. Launcher credentials are never extracted.
+
+### Automatic identity for multiple computers
+
+Main generates a 16-character player name per machine, for example `TypeSafeBotA1B2C` (illustrative, not an actual identity). Initial selection prefers non-internal adapters with globally assigned MAC addresses, sorts candidates deterministically and deduplicates IPv4/IPv6 entries. The selected MAC digest and name are cached in private `runtime/bot-identity.json`; raw MAC addresses are not written to logs, sent to Minecraft or returned to the browser. Restarts retain the name while that adapter remains available. A copied cache is regenerated if its MAC digest is absent on the new machine. No usable MAC causes an explicit startup failure rather than falling back to a shared name.
+
+Two machines can therefore use their own automatically selected names, and RCON position/inventory queries target each instance's displayed name. The 16-character username limit leaves only five suffix characters, so truncated digests cannot mathematically guarantee uniqueness. Cloned MAC addresses also generate the same name. Running two instances on the same machine deliberately uses the same identity and still conflicts on the same Minecraft server. Replacing an adapter or using MAC randomization can change the identity. Names differing from the old `TypeSafeExplorer` are new offline players with separate server-side inventory, location and whitelist entries; no player data is migrated.
+
+Different bots still share the world. Task busy guards apply only to the local dashboard, and isolated flag resets remain restricted to the expected local bot, loopback port and fixed site. Existing atomic-controller and lumber-run snapshots retain their previous behavior until separately updated.
 
 Choose a scenario and press **Start task**. The objective is shown read-only. Creative mode is rejected because broken logs do not produce normal Survival drops. **Pause** stops the current action; **Resume task** continues the existing objective until its time budget expires. A completed or expired task starts a new baseline when started again.
 
@@ -544,7 +552,7 @@ The RCON bridge accepts only local, same-origin console requests and does not us
 | `TYPESAFE_API_KEY` | Required | Backend-only API key. |
 | `TYPESAFE_MODEL` | `jev-latest` | Requested model alias. |
 | `MC_HOST` | `127.0.0.1` | Minecraft host; this demo is intended for local use. |
-| `MC_PORT` | `25575` | Connection helper default; the dashboard uses the entered port. |
+| `MC_PORT` | `25565` | Game connection default; distinct from RCON. The dashboard uses the entered port. |
 | `MC_VERSION` | Auto-detect when unset | Optional protocol version; `.env.example` selects 1.21.4. |
 | `FLAG_DEMO_RESET` | Disabled | Set `1` only for the managed isolated demo reset adapter. |
 | `FLAG_ORIGIN` | Relative to starting position | Optional integer `x,y,z` origin of the ground mosaic. |

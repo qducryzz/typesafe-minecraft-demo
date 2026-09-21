@@ -27,6 +27,7 @@ function fillBars(answer){
   }
 }
 function render(s) {
+  $('bot-username').textContent=s.botUsername||'Waiting for identity';
   if(lastScenario!==s.scenario){
     lastScenario=s.scenario;
     $('scenario').replaceChildren(...s.scenarios.map(item=>{const option=document.createElement('option');option.value=item.id;option.textContent=item.name+(item.available?'':' (coming next)');option.disabled=!item.available;return option;}));
@@ -85,7 +86,7 @@ function render(s) {
   const connecting=String(s.status||'').toLowerCase().includes('connecting');
   const failed=!s.ready && !connecting;
   $('empty-title').textContent=s.ready?'':(failed?'Not connected': 'Connecting to the Java world');
-  $('empty-copy').textContent=s.ready?'':(failed?(s.status||'Could not join the Java world. Check host/port, then Connect.'):'TypeSafeExplorer is joining the 1.21.4 backend. Steve and the live Prismarine view will appear here.');
+  $('empty-copy').textContent=s.ready?'':(failed?(s.status||'Could not join the Java world. Check host/port, then Connect.'):`${s.botUsername||'The bot'} is joining the 1.21.4 backend. Steve and the live Prismarine view will appear here.`);
   lastReady=s.ready;
   if(s.position) $('position').textContent=`${s.position.x.toFixed(1)} / ${s.position.y.toFixed(1)} / ${s.position.z.toFixed(1)}`;
   fillBars(s.latest?.answer);

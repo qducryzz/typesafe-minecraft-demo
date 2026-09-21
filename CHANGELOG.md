@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Generate a machine-specific bot identity
+
+- Main now derives a 16-character `TypeSafeBot` alias from a selected network adapter MAC digest and keeps a private adapter-bound cache. Selection is deterministic, survives enumeration changes, and rejects unavailable/invalid MACs instead of sharing a fallback name. Raw MACs are not logged or sent to the server. README explains the five-character suffix's collision limit, adapter changes and separate offline-player data.
+- Show the alias in the dashboard and RCON panel; generate RCON queries and isolated flag setup commands for the expected local identity while preserving host, port, origin and player restrictions. Update deployment instructions and the Chinese command reference.
+- Validation: all 108 offline/HTTP tests and documentation sync/check pass. Browser-verified both identity labels and confirmed the renamed bot joined the configured Java server. Different-machine fixtures produce distinct names; a second physical computer was not tested. No automated gameplay or world-reset command was run.
+
 ### Document the RCON console in Chinese
 
 - Add a command reference covering connection settings, built-in queries, manual debugging commands, Lumber verification boundaries, operation limits and troubleshooting. Link it from README. Examples contain no real host addresses or credentials; world-changing commands are documented, not executed.

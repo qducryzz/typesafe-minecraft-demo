@@ -1,13 +1,18 @@
 const {randomUUID}=require('node:crypto');
 const {RconClient}=require('./rcon-client.cjs');
 const {trace}=require('./trace.cjs');
-const presets={players:{label:'在线玩家',command:'list'},position:{label:'机器人坐标',command:'data get entity TypeSafeExplorer Pos'},inventory:{label:'机器人背包',command:'data get entity TypeSafeExplorer Inventory'},time:{label:'世界时间',command:'time query daytime'},seed:{label:'世界种子',command:'seed'}};
+const {resolveBotIdentity}=require('./bot-identity.cjs');
+function presetsFor(botUsername){
+  if(!/^TypeSafeBot[A-Z0-9]{5}$/.test(botUsername))throw new Error('Invalid generated bot username');
+  return {players:{label:'在线玩家',command:'list'},position:{label:'机器人坐标',command:`data get entity ${botUsername} Pos`},inventory:{label:'机器人背包',command:`data get entity ${botUsername} Inventory`},time:{label:'世界时间',command:'time query daytime'},seed:{label:'世界种子',command:'seed'}};
+}
 const fail=(message,status=400)=>Object.assign(new Error(message),{status});
-function createRconConsole({defaultHost=()=> '127.0.0.1',env=process.env,isTaskBusy=()=>false,onChange=()=>{},Client=RconClient}={}){
+function createRconConsole({botUsername=resolveBotIdentity().username,defaultHost=()=> '127.0.0.1',env=process.env,isTaskBusy=()=>false,onChange=()=>{},Client=RconClient}={}){
+  const presets=presetsFor(botUsername);
   let host=env.RCON_HOST||defaultHost(),port=Number(env.RCON_PORT||25575),password=env.RCON_PASSWORD||'';
   let configuredHost=host,configuredPort=port,client=null,busy=false,status='未连接',connected=false,history=[];
   trace.addSecret(password);
-  const state=()=>({host,port,connected,busy,status,passwordConfigured:!!password,taskBusy:!!isTaskBusy(),presets,history});
+  const state=()=>({botUsername,host,port,connected,busy,status,passwordConfigured:!!password,taskBusy:!!isTaskBusy(),presets,history});
   function notify(){onChange();}
   async function connect(input={}){
     if(busy)throw fail('RCON 正在处理操作，请稍候。',409);
@@ -67,4 +72,4 @@ function installRconRoutes(app,console){
     });
   }
 }
-module.exports={createRconConsole,installRconRoutes,presets};
+module.exports={createRconConsole,installRconRoutes,presetsFor};

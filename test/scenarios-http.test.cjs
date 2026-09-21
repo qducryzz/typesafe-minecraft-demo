@@ -14,4 +14,8 @@ test('scenario API switches both ways, resets displayed state and rejects unavai
  const lumber=await post({scenario:'lumber'});assert.equal(lumber.status,200);assert.ok(lumber.body.actionLabels.harvest_nearest);assert.equal(lumber.body.actionLabels.forward,undefined);assert.equal(lumber.body.task,null);
  assert.equal((await post({scenario:'cabin'})).status,400);assert.equal((await post({scenario:'missing'})).status,400);
  const unchanged=await (await fetch(`http://127.0.0.1:${port}/api/state`)).json();assert.equal(unchanged.scenario,'lumber');assert.equal(unchanged.keyConfigured,false);
+ assert.match(unchanged.botUsername,/^TypeSafeBot[A-Z0-9]{5}$/);
+ const rcon=await (await fetch(`http://127.0.0.1:${port}/api/rcon/state`)).json();
+ assert.equal(rcon.botUsername,unchanged.botUsername);
+ assert.equal(rcon.presets.position.command,`data get entity ${unchanged.botUsername} Pos`);
 });

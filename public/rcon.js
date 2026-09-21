@@ -3,6 +3,8 @@
  let state=null,working=false,poll=null,outputSignature='',initialized=false;
  function render(next){
   state=next;el('rcon-status').textContent=next.status;
+  el('rcon-bot-name').textContent=next.botUsername;
+  el('rcon-command').placeholder=`例如：data get entity ${next.botUsername} Health`;
   if(!initialized){el('rcon-host').value=next.host;el('rcon-port').value=next.port;initialized=true;}
   if(document.activeElement!==el('rcon-host')&&!el('rcon-host').value)el('rcon-host').value=next.host;
   if(document.activeElement!==el('rcon-port')&&!el('rcon-port').value)el('rcon-port').value=next.port;

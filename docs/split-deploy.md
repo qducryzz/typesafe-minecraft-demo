@@ -28,7 +28,7 @@ Keep:
 
 - version `1.21.4`
 - `online-mode=false` (offline Mineflayer login)
-- whitelist off, or whitelist the bot name `TypeSafeExplorer`
+- whitelist the generated bot name shown by the dashboard if the whitelist is enabled
 
 Suggested `server.properties` (only change what you still need):
 
@@ -51,7 +51,7 @@ Optional:
 
 No plugins required. Seed / world reset is still: stop, set `level-seed`, delete `world` / `world_nether` / `world_the_end`, start. The dashboard cannot regenerate the world.
 
-Bot username is always `TypeSafeExplorer`. Survival mode is required for lumber drops.
+Main generates the bot username from a host network adapter MAC digest: `TypeSafeBot` plus five characters. Read the exact name from the dashboard and use that name in operator commands and whitelist entries. The private identity cache lives in `runtime/bot-identity.json`. Changing identity creates a separate offline player; it does not migrate the old `TypeSafeExplorer` inventory or position. Survival mode is required for lumber drops. See README for adapter changes, cloned MACs and short-name collision limits.
 
 ### A2. Node dashboard (this repo)
 
