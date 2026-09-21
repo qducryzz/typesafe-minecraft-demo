@@ -509,7 +509,9 @@ Code handles control-key execution, game protocol interactions, physics, validat
 
 **Record tab** opens the browser's screen-sharing picker. Select the dashboard tab, then stop recording to download a WebM video. Nothing is posted automatically. Prismarine Viewer renders the real server world in third-person or overhead view.
 
-Structured diagnostic events are also written to `runtime/trace-*.jsonl`, independently in each worktree. Optional `TRACE_DIR` overrides this diagnostic directory. Every process has a session ID and monotonically increasing event sequence; task start/resume, observations, inference attempts, requests, and tools carry correlation IDs. Pause/Resume preserves the task ID; a fresh run gets a new one.
+Each process creates a schema-v2 archive: `runtime/archive-<timestamp>-<sessionId>.json`, `trace-<timestamp>-<sessionId>.jsonl` and `decisions-<timestamp>-<sessionId>.jsonl`. The manifest maps the files and records the bot identity and process start/close metadata. Optional `ARCHIVE_DIR` changes the archive directory; `TRACE_DIR` can separately override trace storage, with its location recorded in the manifest. All files share `sessionId`; both JSONL files carry run/decision/observation/request/tool correlation IDs where applicable. Pause/Resume preserves the task ID; a fresh run gets a new one. See [归档关联与查询说明](docs/archive-recording.zh-CN.md).
+
+Decision summaries include a unique `recordId`, file-wide `decisionSequence`, and exact `traceEventId`/`traceSequence` references. Each started decision round has one `decision.finished` terminal record on normal completion, failure, cancellation or a no-action stop; stale responses and API retry records retain their own observation/request IDs under the same decision ID. Failures before a model request have `requestId: null`, not fabricated model input/output. Navigation events during tool execution inherit that tool's IDs. Browser controls use `httpRequestId` and are distinct from model `requestId`.
 
 The trace covers process startup/listen/shutdown/exit, fatal JavaScript errors, control request results, Minecraft connection/spawn/ready/timeout/error/kick/end/death, setup/reset failures, observations, candidate exclusions, request/response/validation failures, retries, stale decisions, tool starts/results/errors and task stop reasons. Request and tool start events are synchronously written and flushed before the operation, so an unfinished operation can be recognized after a crash. Authentication headers and configured API keys are redacted; HTTP control bodies are never recorded. Logs remain private local files and are ignored by Git.
 
@@ -517,7 +519,11 @@ High-level Lumber traces include each bounded path search, its computation slice
 
 These logs do not reconstruct world state or record video. They cannot record an event after an OS force-kill, power loss or storage failure; in those cases the last start event may have no matching end. Fatal exceptions retain Node's normal termination behavior. Logging never substitutes an action or enables navigation in direct mode. No automatic retention cleanup is performed.
 
-Decision logs are stored in `runtime/decisions-*.jsonl` with timestamps, observations, actual responses, outcomes, and movement measurements. Logs, videos, world files, keys, and session notes are excluded from the intended public tree. See [SECURITY.md](SECURITY.md).
+Decision logs are stored in `runtime/decisions-*.jsonl` with timestamps, observations, actual responses, outcomes, and movement measurements. `recordType` distinguishes model decisions, API errors and rounds that ended without an executable response; the displayed numeric `id` is not a cross-file key. Summary writes use the same redaction as trace. Trace summaries are flushed first, then decisions; these are two separate writes, so interruption can leave a trace terminal record without its summary copy. The reader also supports in-flight request IDs with no summary yet. Existing schema-v1 files are preserved without invented IDs and are not accepted by the v2 reader. Logs, videos, world files, keys, and session notes are excluded from the intended public tree. See [SECURITY.md](SECURITY.md).
+
+```sh
+node scripts/read-archive.cjs runtime/archive-<timestamp>-<sessionId>.json <decisionId-or-recordId>
+```
 
 ## Configuration
 

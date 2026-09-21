@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Link decision summaries and traces by archive IDs
+
+- Add schema-v2 manifests with shared session-based filenames, explicit summary-to-trace references and run/decision/observation/request/tool IDs. Preserve separate retry/discard rows and one terminal record per round, including failures before inference and cancelled actions. Link active navigation events to the executing tool.
+- Add the archive reader and Chinese reference; keep high-level/direct mode behavior and the existing bot identity. Test servers use temporary archive directories. Historical logs are not rewritten.
+- Validation: all 100 offline/HTTP tests pass; documentation sync/check and whitespace checks pass. Includes archive joins, cancellation, retry IDs, incomplete-round queries, mode/identity preservation and secret redaction. No live model calls or gameplay were run.
+
 ### Add correlated diagnostic traces
 
 - Add private, per-process `trace-*.jsonl` files with session/run/decision/request/span IDs. Record connection lifecycle, controls, task start/resume/pause/stop, setup, observations, API failures/retries, tool starts/results/errors, fatal exceptions and graceful shutdown. Flush start events before requests and execution; redact configured credentials and omit control bodies.
