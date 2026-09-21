@@ -1,6 +1,8 @@
 const { Vec3 } = require('vec3');
 const { Movements, goals } = require('mineflayer-pathfinder');
 const { point } = require('./observe.cjs');
+const { setImmediate: yieldTurn } = require('node:timers/promises');
+const {trace,audit}=require('./trace.cjs');
 const LOG = /^(oak|spruce|birch|jungle|acacia|dark_oak|mangrove|cherry|pale_oak)_log$/;
 const OBJECTIVE = 'Find trees, collect 10 new logs, then return to the starting position.';
 const logCount = bot => bot.inventory.items().filter(i => LOG.test(i.name)).reduce((n,i)=>n+i.count,0);
@@ -34,24 +36,74 @@ function configure(bot) {
 }
 const v = p => new Vec3(p.x,p.y,p.z);
 const harvestGoal = (bot,p) => new goals.GoalLookAtBlock(v(p),bot.world,{reach:4.0});
-function candidates(bot, task) {
+async function reachable(bot, goal, {signal, deadline=performance.now()+350}={}) {
+  const searchId=require('node:crypto').randomUUID(),slices=[];
+  const target=goal.pos?point(goal.pos):{x:goal.x,y:goal.y,z:goal.z};
+  trace.event('path.search.start',{searchId,goal:goal.constructor.name,target,remainingBudgetMs:Math.max(0,deadline-performance.now())});
+  let outcome='cancelled';
+  try {
+  signal?.throwIfAborted();
+  if(performance.now()>=deadline){outcome='budget-exhausted';return false;}
+  const search=bot.pathfinder.getPathFromTo(bot.pathfinder.movements,bot.entity.position,goal,
+    {timeout:Math.min(350,deadline-performance.now()),tickTimeout:15});
+  try {
+    for(const {result} of search) {
+      slices.push({status:result.status,time:result.time,cost:result.cost,visitedNodes:result.visitedNodes,generatedNodes:result.generatedNodes,pathLength:result.path?.length});
+      signal?.throwIfAborted();
+      if(result.status==='success'){outcome='success';return true;}
+      if(result.status!=='partial'||performance.now()>=deadline){outcome=result.status==='partial'?'budget-exhausted':result.status;return false;}
+      await yieldTurn(undefined,{signal});
+    }
+    outcome='search-ended';return false;
+  } finally { search.return?.(); }
+  } catch(error){outcome=signal?.aborted?'cancelled':'error';trace.event('path.search.error',{searchId,error});throw error;}
+  finally {trace.event('path.search.end',{searchId,target,outcome,slices});}
+}
+async function candidates(bot, task, {signal}={}) {
+  const report=audit('lumber');
+  try {
+  signal?.throwIfAborted();
   const available = p => !task.failed[`${p.x},${p.y},${p.z}`] || Date.now()-task.failed[`${p.x},${p.y},${p.z}`]>45000;
-  const reachable = goal => bot.pathfinder.getPathTo(bot.pathfinder.movements,goal,100).status==='success';
-  const logs = bot.findBlocks({matching:b=>LOG.test(b.name),maxDistance:24,count:24}).filter(available)
-    .filter(p=>!(Math.floor(bot.entity.position.x)===p.x&&Math.floor(bot.entity.position.z)===p.z&&p.y<bot.entity.position.y))
+  let deadline=performance.now()+1200;
+  const canReach = goal => reachable(bot,goal,{signal,deadline});
+  const logs = bot.findBlocks({matching:b=>LOG.test(b.name),maxDistance:24,count:24}).filter(p=>available(p)||report.reject(point(p),'failure-cooldown'))
+    .filter(p=>!(Math.floor(bot.entity.position.x)===p.x&&Math.floor(bot.entity.position.z)===p.z&&p.y<bot.entity.position.y)||report.reject(point(p),'log-under-player'))
     .sort((a,b)=>distance(a,bot.entity.position)-distance(b,bot.entity.position));
   const targets=[];
-  for(const p of logs) { if(reachable(harvestGoal(bot,p)))targets.push({position:point(p),name:bot.blockAt(p).name,distance:+distance(p,bot.entity.position).toFixed(1)}); if(targets.length===2)break; }
-  const drops=Object.values(bot.entities).filter(e=>e.name==='item'&&LOG.test(e.getDroppedItem?.()?.name||'')&&distance(e.position,bot.entity.position)<24&&available(e.position.floored())).sort((a,b)=>distance(a.position,bot.entity.position)-distance(b.position,bot.entity.position));
-  const drop=drops.find(e=>reachable(new goals.GoalNear(e.position.x,e.position.y,e.position.z,1)));
+  for(const [index,p] of logs.entries()) {
+    if(await canReach(harvestGoal(bot,p))){targets.push({position:point(p),name:bot.blockAt(p).name,distance:+distance(p,bot.entity.position).toFixed(1)});report.keep(point(p),'reachable-log');}
+    else report.reject(point(p),'path-not-confirmed-see-search-event');
+    if(targets.length===2||performance.now()>=deadline){for(const rest of logs.slice(index+1))report.reject(point(rest),targets.length===2?'candidate-limit':'search-budget');break;}
+  }
+  const drops=Object.values(bot.entities).filter(e=>{
+    if(e.name!=='item'||!LOG.test(e.getDroppedItem?.()?.name||''))return false;
+    if(distance(e.position,bot.entity.position)>=24)return report.reject(point(e.position),'drop-out-of-range');
+    return available(e.position.floored())||report.reject(point(e.position),'drop-failure-cooldown');
+  }).sort((a,b)=>distance(a.position,bot.entity.position)-distance(b.position,bot.entity.position));
+  deadline=performance.now()+400;
+  let drop;
+  for(const [index,e] of drops.entries()) {
+    if(await canReach(new goals.GoalBlock(e.position.x,e.position.y,e.position.z))) {drop=e;report.keep(point(e.position),'reachable-drop');}
+    else report.reject(point(e.position),'drop-path-not-confirmed');
+    if(drop||performance.now()>=deadline){for(const rest of drops.slice(index+1))report.reject(point(rest.position),drop?'drop-candidate-limit':'drop-search-budget');break;}
+  }
   let frontier=null;
-  for(const p of bot.findBlocks({matching:b=>['grass_block','dirt'].includes(b.name),maxDistance:20,count:160})) {
+  deadline=performance.now()+1400;
+  const floors=bot.findBlocks({matching:b=>b.boundingBox==='block'&&!bot.pathfinder.movements.blocksToAvoid.has(b.type),maxDistance:16,count:512});
+  for(const [index,p] of floors.entries()) {
     const feet=p.offset(0,1,0); const d=distance(feet,bot.entity.position);
-    if(d<5||d>16||!available(feet)||task.visited.some(old=>distance(old,feet)<4))continue;
-    if(bot.blockAt(feet)?.boundingBox!=='empty'||bot.blockAt(feet.offset(0,1,0))?.boundingBox!=='empty')continue;
-    if(reachable(new goals.GoalBlock(feet.x,feet.y,feet.z))) {frontier=point(feet);break;}
+    const reason=d<1.5?'too-close':d>16?'too-far':!available(feet)?'failure-cooldown':task.visited.some(old=>distance(old,feet)<1.5)?'already-visited':bot.blockAt(feet)?.boundingBox!=='empty'?'feet-blocked-or-unloaded':bot.blockAt(feet.offset(0,1,0))?.boundingBox!=='empty'?'head-blocked-or-unloaded':null;
+    if(reason){report.reject(point(feet),reason);continue;}
+    if(await canReach(new goals.GoalBlock(feet.x,feet.y,feet.z))) {frontier=point(feet);report.keep(frontier,'reachable-exploration');}
+    else report.reject(point(feet),'exploration-path-not-confirmed');
+    if(frontier||performance.now()>=deadline){for(const rest of floors.slice(index+1))report.reject(point(rest.offset(0,1,0)),frontier?'exploration-candidate-limit':'exploration-search-budget');break;}
   }
   return { logs:targets, droppedLog:drop?{id:drop.id,position:point(drop.position)}:null, exploreDestination:frontier };
+  } finally {report.finish({scanLimits:{logs:24,logRadius:24,floors:512,floorRadius:16},floorPredicate:'solid and not blocksToAvoid'});}
+}
+function requireCandidates(seen, progress) {
+  if(progress.collected<progress.target&&!seen.logs.length&&!seen.droppedLog&&!seen.exploreDestination)
+    throw new Error('No safe Lumber target found within the search budget. Pause and check terrain or reposition the bot before retrying.');
 }
 function cancel(bot) { bot.pathfinder?.setGoal(null); bot.stopDigging(); bot.clearControlStates(); }
 async function bounded(bot, signal, work) {
@@ -70,7 +122,14 @@ async function executeTask(bot,task,choice,seen,signal) {
       if(choice==='wait'){await new Promise(r=>setTimeout(r,1000));signal.throwIfAborted();return 'waited';}
       if(choice==='return_home') {target=task.home;await bot.pathfinder.goto(new goals.GoalNear(target.x,target.y,target.z,1));return 'reached home';}
       if(choice==='explore') {target=seen.exploreDestination;if(!target)return 'unavailable: no reachable exploration destination';await bot.pathfinder.goto(new goals.GoalBlock(target.x,target.y,target.z));task.visited.push(target);return 'explored new ground';}
-      if(choice==='pickup') {target=seen.droppedLog?.position;if(!target)return 'unavailable: no reachable dropped log';await bot.pathfinder.goto(new goals.GoalNear(target.x,target.y,target.z,0));await new Promise(r=>setTimeout(r,600));return 'visited dropped log';}
+      if(choice==='pickup') {
+        const drop=bot.entities[seen.droppedLog?.id];
+        if(!drop||!LOG.test(drop.getDroppedItem?.()?.name||''))return 'unavailable: dropped log disappeared';
+        target=drop.position;const before=logCount(bot);
+        await bot.pathfinder.goto(new goals.GoalBlock(target.x,target.y,target.z));
+        await new Promise(r=>setTimeout(r,600));signal.throwIfAborted();
+        return logCount(bot)>before?'collected dropped logs':'visited drop location; no inventory gain';
+      }
       target=seen.logs[choice==='harvest_alternative'?1:0]?.position;
       if(!target)return 'unavailable: no reachable log';
       await bot.pathfinder.goto(harvestGoal(bot,target));signal.throwIfAborted();
@@ -80,9 +139,10 @@ async function executeTask(bot,task,choice,seen,signal) {
       await new Promise(r=>setTimeout(r,500));return `mined ${block.name}; inventory verifies collection`;
     });
   } catch(error) {
+    trace.event('tool.internal-error',{choice,target,error,cancelled:signal.aborted});
     if(target) task.failed[`${Math.floor(target.x)},${Math.floor(target.y)},${Math.floor(target.z)}`]=Date.now();
     if(signal.aborted)throw error;
     return `action failed: ${error.message}`;
   } finally {cancel(bot);}
 }
-module.exports={OBJECTIVE,LOG,logCount,createTask,progress,stopReason,configure,candidates,executeTask,bounded,cancel};
+module.exports={OBJECTIVE,LOG,logCount,createTask,progress,stopReason,configure,candidates,executeTask,bounded,cancel,reachable,requireCandidates};

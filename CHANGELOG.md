@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Add correlated diagnostic traces
+
+- Add private, per-process `trace-*.jsonl` files with session/run/decision/request/span IDs. Record connection lifecycle, controls, task start/resume/pause/stop, setup, observations, API failures/retries, tool starts/results/errors, fatal exceptions and graceful shutdown. Flush start events before requests and execution; redact configured credentials and omit control bodies.
+- Record high-level path-search slices/status/budget and candidate exclusion reasons, plus direct terrain checks, target ranking, blueprint/supply filtering and action exclusions. Preserve controller choices and safety restrictions. README documents coverage and force-kill/storage limits.
+- Validation: 90 offline/HTTP tests pass; documentation sync/check pass. Includes real local HTTP connection-error/shutdown tests and synthetic route, cancellation, malformed-response and secret-redaction checks. No live API calls or completed gameplay were used for validation.
+
+### Repair high-level Lumber candidate search and pickup
+
+- Resume partial path searches asynchronously under bounded per-target and per-category budgets. Preserve cancellation, hazard restrictions and model-selected execution. Include nearby solid exploration footholds instead of only distant grass/dirt targets.
+- Stop before inference when gathering has no available candidate, with a visible search-budget/terrain explanation. Revalidate dropped items and their current position before pickup, and report inventory gain accurately.
+- Correct README control-mode descriptions and document the search limits. All 80 offline/HTTP tests pass, including new partial-search, cancellation, canopy, obstruction, no-candidate and pickup regressions. No live gameplay completion was verified.
+
 ### Publish the direct-control demo
 
 - The recorded final controller run completed mining, collection, all 338 placements and inspection in 1,848 decisions and 13m21s. No maintenance pause or manual gameplay intervention was needed; one service error recovered automatically. Updated README verification to match the reviewed recording. Earlier entries below retain their validation limits at the time.

@@ -1,3 +1,4 @@
+const {trace,audit}=require('./trace.cjs');
 const {Vec3}=require('vec3');
 const {setTimeout:delay}=require('node:timers/promises');
 const {inspect,point}=require('./observe.cjs');
@@ -7,13 +8,26 @@ const resources=require('./flag-resources.cjs');
 const {actions,instructions}=require('./direct-actions.cjs');
 const vec=p=>new Vec3(p.x,p.y,p.z);
 function relative(bot,p){const d=vec(p).minus(bot.entity.position),y=bot.entity.yaw;return {distance:+d.norm().toFixed(2),forward:+(-Math.sin(y)*d.x-Math.cos(y)*d.z).toFixed(2),right:+(Math.cos(y)*d.x-Math.sin(y)*d.z).toFixed(2)};}
-function movementSafe(bot,choice){const offsets={forward:0,jump_forward:0,backward:Math.PI,left:Math.PI/2,right:-Math.PI/2};if(!(choice in offsets))return false;return [.35,.7,1.1].every(d=>{const s=inspect(bot,bot.entity.yaw+offsets[choice],d).status;return s==='clear'||s==='one_block_descent'||(choice==='jump_forward'&&s==='one_block_rise');});}
+function movementSafe(bot,choice){
+ const offsets={forward:0,jump_forward:0,backward:Math.PI,left:Math.PI/2,right:-Math.PI/2};
+ if(!(choice in offsets))return false;
+ const samples=[];
+ const safe=[.35,.7,1.1].every(distance=>{
+  const sample=inspect(bot,bot.entity.yaw+offsets[choice],distance),s=sample.status;
+  samples.push({distance,...sample});
+  return s==='clear'||s==='one_block_descent'||(choice==='jump_forward'&&s==='one_block_rise');
+ });
+ trace.event('movement.safety',{choice,safe,samples});return safe;
+}
 function targets(bot,task){
  if(task.scenario==='flag'){
   const p=flag.progress(bot,task),r=resources.candidates(bot,task,p.required),scan=flag.inspectBlueprint(bot,task);
+  trace.event('blueprint.scan',{missing:scan.missing,blocked:scan.blocked,unloaded:scan.unknown,correct:scan.correct.length,needsMaterials:p.needsMaterials});
   return {mining:[...r.red_wool,...r.white_wool],placing:p.needsMaterials?[]:scan.missing,drops:resources.drops(bot,task).filter(e=>p.inventory[e.getDroppedItem().name]<p.required[e.getDroppedItem().name]).map(e=>({position:point(e.position),name:e.getDroppedItem().name})),canInspect:scan.correct.length===338};
  }
- const mining=bot.findBlocks({matching:b=>LOG.test(b.name),maxDistance:24,count:24}).filter(p=>!(p.y<bot.entity.position.y&&p.x===Math.floor(bot.entity.position.x)&&p.z===Math.floor(bot.entity.position.z))).map(p=>({position:point(p),name:bot.blockAt(p).name}));
+ const report=audit('direct-lumber-mining');
+ const mining=bot.findBlocks({matching:b=>LOG.test(b.name),maxDistance:24,count:24}).filter(p=>!(p.y<bot.entity.position.y&&p.x===Math.floor(bot.entity.position.x)&&p.z===Math.floor(bot.entity.position.z))||report.reject(point(p),'log-under-player')).map(p=>({position:point(p),name:bot.blockAt(p).name}));
+ report.finish({eligible:mining,scanLimits:{radius:24,count:24}});
  return {mining,placing:[],drops:Object.values(bot.entities).filter(e=>e.name==='item'&&LOG.test(e.getDroppedItem?.()?.name||'')).map(e=>({position:point(e.position),name:e.getDroppedItem().name})),canInspect:false};
 }
 const same=(a,b)=>a&&b&&a.x===b.x&&a.y===b.y&&a.z===b.z;
@@ -39,14 +53,21 @@ function placementSight(bot,cell){
 function overlapsPlayer(bot,cell){const p=bot.entity.position,c=cell.position;return p.x+.3>c.x&&p.x-.3<c.x+1&&p.z+.3>c.z&&p.z-.3<c.z+1&&p.y<c.y+1&&p.y+1.8>c.y;}
 function aimedPlacement(bot,cells){const hit=crosshair(bot);if(!hit)return null;return cells.find(c=>same(hit.position,vec(c.position).offset(0,-1,0))&&!overlapsPlayer(bot,c))||null;}
 function observeDirect(bot,task){
- const all=targets(bot,task),sort=a=>a.map(c=>({...c,...relative(bot,c.approachPosition||c.position)})).sort((a,b)=>a.distance-b.distance).slice(0,2);
+ const report=audit('direct-target-ranking');
+ const all=targets(bot,task),sort=a=>{
+  const ranked=a.map(c=>({...c,...relative(bot,c.approachPosition||c.position)})).sort((a,b)=>a.distance-b.distance);
+  ranked.forEach((c,index)=>index<2?report.keep(c,'nearest-two'):report.reject(c,'candidate-limit'));
+  return ranked.slice(0,2);
+ };
  all.drops=all.drops.map(c=>({...c,approachPosition:{x:Math.floor(c.position.x)+.5,y:c.position.y,z:Math.floor(c.position.z)+.5}}));
- const openPlacements=all.placing.filter(c=>!overlapsPlayer(bot,c));
+ const openPlacements=all.placing.filter(c=>!overlapsPlayer(bot,c)||report.reject(c,'overlaps-player; retained only when all placements overlap'));
  const candidates=(openPlacements.length?openPlacements:all.placing).map(c=>({...c,...placementSight(bot,c),blockedByPlayer:overlapsPlayer(bot,c),approachPosition:{x:c.position.x+.5,y:c.position.y,z:c.position.z+.5}}));
  const visible=candidates.filter(c=>c.visible);
+ if(visible.length)for(const c of candidates)if(!c.visible)report.reject(c,'prefer-visible-placement');
  const placementTargets=sort(visible.length?visible:candidates);
  const hit=crosshair(bot),mine=hit&&all.mining.find(c=>same(c.position,hit.position)&&c.name===hit.name),place=aimedPlacement(bot,all.placing);
- return {miningTargets:sort(all.mining),placementTargets,aimedPlacement:place?{position:place.position,name:place.name}:null,drops:sort(all.drops),home:relative(bot,task.home),heldItem:bot.heldItem?.name||null,crosshair:hit?{position:point(hit.position),name:hit.name}:null,canMine:!!mine,canPlace:!!place&&bot.heldItem?.name===place.name,canInspect:all.canInspect,movementSafe:Object.fromEntries(['forward','backward','left','right','jump_forward'].map(k=>[k,movementSafe(bot,k)]))};
+ const result={miningTargets:sort(all.mining),placementTargets,aimedPlacement:place?{position:place.position,name:place.name}:null,drops:sort(all.drops),home:relative(bot,task.home),heldItem:bot.heldItem?.name||null,crosshair:hit?{position:point(hit.position),name:hit.name}:null,canMine:!!mine,canPlace:!!place&&bot.heldItem?.name===place.name,canInspect:all.canInspect,movementSafe:Object.fromEntries(['forward','backward','left','right','jump_forward'].map(k=>[k,movementSafe(bot,k)]))};
+ report.finish({routeMode:'no-pathfinding'});return result;
 }
 async function execute(bot,task,choice,seen,signal){
  try{return await bounded(bot,signal,async()=>{
@@ -91,6 +112,6 @@ async function execute(bot,task,choice,seen,signal){
   if(choice==='inspect_flag'){if(task.scenario!=='flag'||!targets(bot,task).canInspect)return 'unavailable: flag incomplete';task.inspected=true;return 'verified all 338 flag cells';}
   if(choice==='wait'){await delay(250,undefined,{signal});return 'waited';}
   throw new Error('Unknown direct action');
- });}catch(error){if(signal.aborted)throw error;return 'action failed: '+error.message;}finally{cancel(bot);}
+ });}catch(error){trace.event('tool.internal-error',{choice,error,cancelled:signal.aborted});if(signal.aborted)throw error;return 'action failed: '+error.message;}finally{cancel(bot);}
 }
 module.exports={actions,instructions,observeDirect,execute,movementSafe,relative,overlapsPlayer,placementSight,crosshair};

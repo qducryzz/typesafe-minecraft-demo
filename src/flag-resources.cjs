@@ -1,3 +1,4 @@
+const {trace,audit}=require('./trace.cjs');
 const {Vec3}=require('vec3');
 const {goals}=require('mineflayer-pathfinder');
 const {setTimeout:delay}=require('node:timers/promises');
@@ -9,12 +10,19 @@ function inside(task,p){return p.x>=task.origin.x-1&&p.x<=task.origin.x+29&&p.z>
 function drops(bot,task){return Object.values(bot.entities||{}).filter(e=>e.name==='item'&&names.includes(e.getDroppedItem?.()?.name)&&inside(task,e.position));}
 function scan(bot,task){const cells=banks(task.origin);return Object.fromEntries(names.map(name=>[name,cells.filter(c=>c.name===name&&bot.blockAt(vec(c.position))?.name===name).length]));}
 function candidates(bot,task,required){
+ const report=audit('flag-supplies');
  const items=inventory(bot),p=bot.entity.position,result={};
  for(const name of names){const needed=Math.max(0,required[name]-items[name]);
-  result[name]=banks(task.origin).filter(c=>c.name===name&&bot.blockAt(vec(c.position))?.name===name&&(!task.failed[JSON.stringify(c.position)]||Date.now()-task.failed[JSON.stringify(c.position)]>30000))
-   .sort((a,b)=>vec(a.position).distanceTo(p)-vec(b.position).distanceTo(p)).slice(0,Math.min(8,needed));
+  result[name]=banks(task.origin).filter(c=>{
+    if(c.name!==name)return false;
+    if(bot.blockAt(vec(c.position))?.name!==name)return report.reject(c,'supply-missing-changed-or-unloaded');
+    if(task.failed[JSON.stringify(c.position)]&&Date.now()-task.failed[JSON.stringify(c.position)]<=30000)return report.reject(c,'failure-cooldown');
+    return true;
+   })
+   .sort((a,b)=>vec(a.position).distanceTo(p)-vec(b.position).distanceTo(p)).filter((c,index)=>index<Math.min(8,needed)?report.keep(c):report.reject(c,needed===0?'inventory-sufficient':'batch-limit'));
  }
  const drop=drops(bot,task).filter(e=>items[e.getDroppedItem().name]<required[e.getDroppedItem().name]).sort((a,b)=>a.position.distanceTo(p)-b.position.distanceTo(p))[0];
+ report.finish();
  return {...result,droppedWool:drop?{id:drop.id,name:drop.getDroppedItem().name,position:{x:drop.position.x,y:drop.position.y,z:drop.position.z}}:null};
 }
 async function collect(bot,position,name,before,signal){
@@ -50,7 +58,7 @@ async function execute(bot,task,choice,seen,required,signal,onProgress){
    if(bot.blockAt(pos)?.name===name)throw new Error('Server did not confirm wool mining');
    task.mined??={red_wool:0,white_wool:0};task.mined[name]++;mined++;
    await collect(bot,pos.offset(.5,0,.5),name,before,signal);onProgress();
-  }catch(error){task.failed[JSON.stringify(cell.position)]=Date.now();throw error;}
+  }catch(error){trace.event('tool.internal-error',{choice,target:cell,error});task.failed[JSON.stringify(cell.position)]=Date.now();throw error;}
  }
  return `Mined and collected ${mined} ${name} blocks; inventory verified`;
 }

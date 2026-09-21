@@ -1,3 +1,4 @@
+const {trace,audit}=require('./trace.cjs');
 const {Vec3}=require('vec3');
 const {goals}=require('mineflayer-pathfinder');
 const {bounded,cancel}=require('./task.cjs');
@@ -67,11 +68,13 @@ function candidates(bot,task){
  const scan=inspectBlueprint(bot,task),items=inventory(bot),p=bot.entity.position;
  const required={red_wool:0,white_wool:0};for(const c of scan.missing)required[c.name]++;
  const gathering=Object.entries(required).some(([name,n])=>items[name]<n);
- const batches={};
+ const batches={},report=audit('flag-build');
+ trace.event('blueprint.scan',{missing:scan.missing,blocked:scan.blocked,unloaded:scan.unknown,correct:scan.correct.length,gathering});
  for(const section of ['red_bars','white_field','maple_leaf']){
-   batches[section]=(gathering?[]:scan.missing).filter(c=>c.section===section&&items[c.name]>0&&(!task.failed[JSON.stringify(c.position)]||Date.now()-task.failed[JSON.stringify(c.position)]>30000))
-    .sort((a,b)=>vec(a.position).distanceTo(p)-vec(b.position).distanceTo(p)).slice(0,4);
+   batches[section]=(gathering?[]:scan.missing).filter(c=>{if(c.section!==section)return false;if(items[c.name]<=0)return report.reject(c,'inventory-empty');if(task.failed[JSON.stringify(c.position)]&&Date.now()-task.failed[JSON.stringify(c.position)]<=30000)return report.reject(c,'failure-cooldown');return true;})
+    .sort((a,b)=>vec(a.position).distanceTo(p)-vec(b.position).distanceTo(p)).filter((c,index)=>index<4?report.keep(c):report.reject(c,'batch-limit'));
  }
+ report.finish({gathering});
  return {...batches,...resources.candidates(bot,task,required),canInspect:scan.correct.length===task.blueprint.length};
 }
 async function executeTask(bot,task,choice,seen,signal){
@@ -104,7 +107,7 @@ async function executeTask(bot,task,choice,seen,signal){
      placed++;progress(bot,task);
    }
    return `Placed and verified ${placed} ${section.replaceAll('_',' ')} blocks`;
- });}catch(error){if(active)task.failed[JSON.stringify(active.position)]=Date.now();if(signal.aborted)throw error;return `action failed: ${error.message}`;}
+ });}catch(error){trace.event('tool.internal-error',{choice,target:active,error,cancelled:signal.aborted});if(active)task.failed[JSON.stringify(active.position)]=Date.now();if(signal.aborted)throw error;return `action failed: ${error.message}`;}
  finally{cancel(bot);}
 }
 module.exports={BUDGET_MS,OBJECTIVE,WIDTH,HEIGHT,LEAF,blueprint,createTask,progress,stopReason,candidates,executeTask,inspectBlueprint};
