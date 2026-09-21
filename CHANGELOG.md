@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Document the RCON console in Chinese
+
+- Add a command reference covering connection settings, built-in queries, manual debugging commands, Lumber verification boundaries, operation limits and troubleshooting. Link it from README. Examples contain no real host addresses or credentials; world-changing commands are documented, not executed.
+- Validation: all 100 offline/HTTP tests pass; documentation sync/check and whitespace checks pass.
+
+### Fix RCON disconnects after successful authentication
+
+- Send each command first and wait for its first complete response packet before sending the read-only completion query. Previously both requests shared one write, causing the live vanilla Java 1.21.4 server to close the connection. Preserve multi-packet assembly, bounded timeouts and no automatic command retries.
+- Add regression coverage for a server that rejects combined or premature requests, including fragmented responses and successive commands. All 100 offline/HTTP tests pass; documentation sync/check pass. README reviewed and updated.
+- Verified the repaired client against the live server and the restarted dashboard in a browser: player list, world time and manual `help` all return real responses on the same connection. No world-changing commands were used; gameplay remains outside this verification.
+
+### Add a local developer RCON console
+
+- Add a Chinese developer panel with separate RCON connection settings, fixed read-only queries, a manual command form and real response history. Keep custom commands unavailable while a bot task is active. Game and RCON ports are explicitly distinct; the example game port is now 25565 and RCON defaults to 25575.
+- Implement bounded backend RCON authentication, fragmented/multi-packet output, serialization, disconnect and uncertain-outcome handling without retries. Keep passwords in backend memory or local environment, redact diagnostics/output, and restrict bridge requests to local same-origin JSON calls. Default dashboard binding is loopback.
+- Validation: all 99 offline/HTTP tests pass; documentation sync/check pass. New TCP/HTTP tests cover authentication, split responses, timeout, cancellation, endpoint-specific password reuse, busy guards, cross-origin rejection and redaction. Browser-verified the panel and missing-password feedback. Real remote RCON authentication/commands remain unverified because no password was provided.
+
+### Add correlated diagnostic traces
+
+- Add private, per-process `trace-*.jsonl` files with session/run/decision/request/span IDs. Record connection lifecycle, controls, task start/resume/pause/stop, setup, observations, API failures/retries, tool starts/results/errors, fatal exceptions and graceful shutdown. Flush start events before requests and execution; redact configured credentials and omit control bodies.
+- Record high-level path-search slices/status/budget and candidate exclusion reasons, plus direct terrain checks, target ranking, blueprint/supply filtering and action exclusions. Preserve controller choices and safety restrictions. README documents coverage and force-kill/storage limits.
+- Validation: 90 offline/HTTP tests pass; documentation sync/check pass. Includes real local HTTP connection-error/shutdown tests and synthetic route, cancellation, malformed-response and secret-redaction checks. No live API calls or completed gameplay were used for validation.
+
+### Repair high-level Lumber candidate search and pickup
+
+- Resume partial path searches asynchronously under bounded per-target and per-category budgets. Preserve cancellation, hazard restrictions and model-selected execution. Include nearby solid exploration footholds instead of only distant grass/dirt targets.
+- Stop before inference when gathering has no available candidate, with a visible search-budget/terrain explanation. Revalidate dropped items and their current position before pickup, and report inventory gain accurately.
+- Correct README control-mode descriptions and document the search limits. All 80 offline/HTTP tests pass, including new partial-search, cancellation, canopy, obstruction, no-candidate and pickup regressions. No live gameplay completion was verified.
+
 ### Publish the direct-control demo
 
 - The recorded final controller run completed mining, collection, all 338 placements and inspection in 1,848 decisions and 13m21s. No maintenance pause or manual gameplay intervention was needed; one service error recovered automatically. Updated README verification to match the reviewed recording. Earlier entries below retain their validation limits at the time.

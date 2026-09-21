@@ -1,3 +1,4 @@
+const {trace}=require('./trace.cjs');
 const {isFresh}=require('./decisions.cjs');
 const {setTimeout:delay}=require('node:timers/promises');
 
@@ -6,10 +7,13 @@ async function decideFresh({observe,decide,position,onDiscard,onServiceError=()=
   for(let attempt=1;attempt<=maxAttempts;attempt++) {
     signal?.throwIfAborted();
     if(!isActive())return null;
-    const state=observe();
+    trace.event('inference.attempt',{attempt});
+    const state=await trace.run({attempt},observe);
+    signal?.throwIfAborted();
+    if(!isActive())return null;
     const started=now();
     let result;
-    try { result=await decide(state); }
+    try { result=await trace.run({attempt},()=>decide(state)); }
     catch(error) {
       signal?.throwIfAborted();
       if(!isActive())return null;

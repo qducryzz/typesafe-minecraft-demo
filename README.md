@@ -10,7 +10,9 @@ The live loop defaults to **high-level control**: Jev chooses `harvest_nearest` 
 
 ## What TypeSafe controls
 
-The current dashboard uses **direct actions**: one API decision chooses one 250 ms movement pulse, a 30-degree turn, aim at an observed target, equip an item, mine one eligible block, place one eligible block, inspect, or wait. Mineflayer executes the selected primitive. The running loop does not call automatic pathfinding or batch mining/building.
+With `CONTROL_MODE=direct`, one API decision chooses one 250 ms movement pulse, a 30-degree turn, aim at an observed target, equip an item, mine one eligible block, place one eligible block, inspect, or wait. Mineflayer executes the selected primitive. This mode does not call automatic pathfinding or batch mining/building.
+
+In the default high-level Lumber mode, code searches for reachable logs, dropped logs and safe exploration footholds; TypeSafe selects the action and Mineflayer navigates to its target. Navigation may clear leaves, but only a selected harvest action mines a log. Candidate search resumes partial pathfinding results and yields between computation slices so Pause remains responsive. Searches have separate bounded budgets for logs, drops and exploration; exhausting a budget does not prove that no route exists. Exploration includes nearby solid footholds such as tree leaves and stone, with clear feet/head space and the existing hazard and drop restrictions. Pickup rechecks the live item position and reports whether inventory increased. If all gathering candidates are empty, the run stops with an explicit reason before another API request. This behavior has offline regression coverage; successful gameplay from every canopy or terrain is not guaranteed.
 
 Code still supplies observations, nearest candidate coordinates, relative distances, the fixed flag blueprint, prepared wool beds, collision vetoes, and completion checks. Aim actions point at a selected target without moving. Mine/place validate the crosshair and target; there is no automatic route, walk to collect drops, equipment selection, or multi-block work inside those actions. This is structured world-state control, not vision from screenshots, and the bot is separate from the owner's signed-in character.
 
@@ -19,7 +21,7 @@ Code still supplies observations, nearest candidate coordinates, relative distan
 ## Scenarios and cameras
 
 - **Canadian Flag:** mine and collect 234 red and 104 white wool from prepared physical supply beds, then place and inspect the 338 cells of a supplied 26 x 13 blueprint. Construction is unavailable until inventory covers all remaining cells. The model does not design the flag, farm sheep or craft dyes.
-- **Lumber Run:** collect ten additional inventory logs, then return within two blocks of the recorded start. The direct controller chooses the movement and single-block interactions. Existing logs do not count.
+- **Lumber Run:** collect ten additional inventory logs, then return within two blocks of the recorded start. High-level mode uses navigation and individual harvest/pickup actions; direct mode chooses movement and single-block interactions separately. Existing logs do not count.
 - **Starter Cabin:** listed but not implemented.
 
 Select a scenario while stopped. Third person follows a visible Steve model; Overhead frames the flag site and supply beds, and is available before starting a connected flag task. There is no first-person option. Cameras never teleport the player. The viewer shows equipped shears/wool, walking limbs and mining swings from live equipment, movement and digging telemetry. Animations are visual representations of game activity, not extra actions.
@@ -507,9 +509,35 @@ Code handles control-key execution, game protocol interactions, physics, validat
 
 **Record tab** opens the browser's screen-sharing picker. Select the dashboard tab, then stop recording to download a WebM video. Nothing is posted automatically. Prismarine Viewer renders the real server world in third-person or overhead view.
 
+Structured diagnostic events are also written to `runtime/trace-*.jsonl`, independently in each worktree. Optional `TRACE_DIR` overrides this diagnostic directory. Every process has a session ID and monotonically increasing event sequence; task start/resume, observations, inference attempts, requests, and tools carry correlation IDs. Pause/Resume preserves the task ID; a fresh run gets a new one.
+
+The trace covers process startup/listen/shutdown/exit, fatal JavaScript errors, control request results, Minecraft connection/spawn/ready/timeout/error/kick/end/death, setup/reset failures, observations, candidate exclusions, request/response/validation failures, retries, stale decisions, tool starts/results/errors and task stop reasons. Request and tool start events are synchronously written and flushed before the operation, so an unfinished operation can be recognized after a crash. Authentication headers and configured API keys are redacted; HTTP control bodies are never recorded. Logs remain private local files and are ignored by Git.
+
+High-level Lumber traces include each bounded path search, its computation slices, visited/generated node counts when provided by the pathfinder, final status and candidate exclusions (cooldown, under-player log, distance, occupancy, visited destination, candidate cap or search budget). Search input radius/count limits are recorded; these are diagnostics of the loaded candidate scan, not an enumeration of every world block or every internal A* node. Direct control explicitly records `no-pathfinding`, terrain safety samples, target ranking/visibility/player overlap and excluded action predicates. Flag traces include blueprint and supply filtering.
+
+These logs do not reconstruct world state or record video. They cannot record an event after an OS force-kill, power loss or storage failure; in those cases the last start event may have no matching end. Fatal exceptions retain Node's normal termination behavior. Logging never substitutes an action or enables navigation in direct mode. No automatic retention cleanup is performed.
+
 Decision logs are stored in `runtime/decisions-*.jsonl` with timestamps, observations, actual responses, outcomes, and movement measurements. Logs, videos, world files, keys, and session notes are excluded from the intended public tree. See [SECURITY.md](SECURITY.md).
 
 ## Configuration
+
+### Developer RCON console
+
+See the **[中文 RCON 控制台参考手册](docs/rcon-console-reference.zh-CN.md)** for commands, debugging workflows, panel limits and troubleshooting.
+
+Use **开发者控制台 · RCON** below the Minecraft connection controls to open the local administrator console. The game connection normally uses port **25565**; the separate RCON console defaults to **25575**. Enter the RCON host, port and password, then Connect. A password in local `RCON_PASSWORD` can be reused without returning it to the browser; a password entered in the panel stays only in backend memory and is cleared from the input after submission. Changing the endpoint requires that endpoint's password.
+
+Quick queries show connected players, the bot's position/inventory, world time and seed. Custom commands run only when the bot task is paused or stopped. The panel shows actual server output, timing and the last 50 commands for the current process. A response is not proof that Minecraft accepted a command; inspect its text. Manual administrator changes are not model achievements. RCON commands and outcomes use the diagnostic trace with password redaction. RCON is separate from TypeSafe and does not require its API key.
+
+The RCON bridge accepts only local, same-origin console requests and does not use the dashboard's external embed origin allowance. Keep the dashboard bound to loopback. Minecraft RCON itself sends credentials over an unencrypted TCP connection; use it on a trusted/private network or through an existing secure tunnel. This panel does not change server access settings. Commands are serialized and have an eight-second timeout and 256 KiB output limit. A read-only `list` query marks response completion so multi-packet command output is assembled; it is not shown as an extra user command. The client waits for the first complete response packet before sending this query, because vanilla Minecraft can close connections when requests arrive together. Disconnects/timeouts have an uncertain execution outcome and are never retried automatically. Closing the panel hides it; use Disconnect to close the RCON session.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `RCON_HOST` | `MC_HOST` | RCON host, independent of the game endpoint. |
+| `RCON_PORT` | `25575` | RCON TCP port. |
+| `RCON_PASSWORD` | Empty | Optional backend password; keep in local `.env` only. |
+
+### Game and model settings
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
