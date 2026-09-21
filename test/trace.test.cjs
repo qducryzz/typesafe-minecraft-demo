@@ -69,7 +69,7 @@ test('observation errors are traced even when inference never starts',async t=>{
 test('HTTP controls, malformed input, refused connection and graceful shutdown produce trace events',async t=>{
  const {directory}=fixture(t);
  const reservation=net.createServer();reservation.listen(0,'127.0.0.1');await once(reservation,'listening');const port=reservation.address().port;await new Promise(r=>reservation.close(r));
- const child=spawn(process.execPath,['-e',"require('./src/server.cjs');process.on('message',()=>process.emit('SIGTERM','SIGTERM'));"],{cwd:path.resolve(__dirname,'..'),env:{...process.env,PORT:String(port),BIND:'127.0.0.1',TRACE_DIR:directory,TYPESAFE_API_KEY:'',MC_AUTOCONNECT:'0'},windowsHide:true,stdio:['pipe','pipe','pipe','ipc']});
+ const child=spawn(process.execPath,['-e',"require('./src/server.cjs');process.on('message',()=>process.emit('SIGTERM','SIGTERM'));"],{cwd:path.resolve(__dirname,'..'),env:{...process.env,PORT:String(port),BIND:'127.0.0.1',ARCHIVE_DIR:directory,TRACE_DIR:directory,TYPESAFE_API_KEY:'',MC_AUTOCONNECT:'0'},windowsHide:true,stdio:['pipe','pipe','pipe','ipc']});
  t.after(()=>child.kill());
  await Promise.race([once(child.stdout,'data'),once(child,'exit').then(()=>{throw new Error('Test server exited');})]);
  const read=()=>fs.readdirSync(directory).filter(f=>f.startsWith('trace-')).flatMap(f=>fs.readFileSync(path.join(directory,f),'utf8').trim().split('\n').filter(Boolean).map(JSON.parse));
@@ -88,6 +88,9 @@ test('HTTP controls, malformed input, refused connection and graceful shutdown p
  assert.ok(read().some(r=>r.event==='connection.error'));
  const exited=once(child,'exit');child.send('shutdown');await exited;
  rows=read();assert.ok(rows.some(r=>r.event==='process.shutdown'));assert.ok(rows.some(r=>r.event==='process.exit'));
+ const manifest=JSON.parse(fs.readFileSync(path.join(directory,fs.readdirSync(directory).find(f=>f.startsWith('archive-'))),'utf8'));
+ assert.equal(manifest.status,'closed');assert.ok(rows.every(r=>r.sessionId===manifest.sessionId));
+ assert.ok(fs.existsSync(path.resolve(directory,manifest.files.decisions)));
 });
 test('fatal errors are logged and still terminate the process',async t=>{
  const {directory}=fixture(t);

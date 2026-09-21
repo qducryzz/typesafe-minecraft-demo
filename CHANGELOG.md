@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Link decision summaries and traces by archive IDs
+
+- Add schema-v2 archive manifests and shared session-based filenames. Every summary carries run/decision/observation/request/tool IDs where applicable, a unique record ID and exact trace-event/sequence references. Preserve complete business request bodies and use the same redaction for both files.
+- Give each round one terminal record for completion, failure, cancellation or no-action stop, retaining separate retry/discard records. Propagate current tool correlation to navigation events. Keep browser HTTP and RCON identifiers distinct from model requests. Add a streaming archive reader and Chinese reference; leave historical logs unchanged.
+- Validation: all 118 offline/HTTP tests pass, including cross-file joins, retries, stale answers, pre-request failures, request/tool cancellations, repeated display IDs, in-flight reads and redaction. No live API requests or gameplay were used for validation. Test servers now archive to temporary directories instead of the operator's runtime directory.
+
+### Add a shareable client configuration sheet
+
+- Add a root-level Chinese setup guide with blank server IP, game/RCON ports, RCON password, client bind/port and API key fields, plus a matching `.env` template and startup instructions. Link it from README. Existing local configuration and credentials are unchanged.
+- Validation: documentation sync/check and whitespace checks pass. No runtime code changed.
+
 ### Generate a machine-specific bot identity
 
 - Main now derives a 16-character `TypeSafeBot` alias from a selected network adapter MAC digest and keeps a private adapter-bound cache. Selection is deterministic, survives enumeration changes, and rejects unavailable/invalid MACs instead of sharing a fallback name. Raw MACs are not logged or sent to the server. README explains the five-character suffix's collision limit, adapter changes and separate offline-player data.

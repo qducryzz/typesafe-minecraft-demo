@@ -47,7 +47,10 @@ test('request timeout retries with fresh observations and backoff, without inven
   const result=await decideFresh(options);
   assert.equal(calls,2);assert.equal(result.state.sample,2);assert.equal(result.result.raw.sample,2);
   assert.deepEqual(waits,[1000]);assert.equal(discarded.length,0);
-  assert.deepEqual(failures,[{kind:'api-error',httpStatus:null,errorType:'timeout',attempt:1,delayMs:1000,retry:true}]);
+  const [{requestId,observationId,...failure}]=failures;
+  assert.match(requestId,/^[0-9a-f-]{36}$/);assert.match(observationId,/^[0-9a-f-]{36}$/);
+  assert.notEqual(requestId,result.correlation.requestId);assert.notEqual(observationId,result.correlation.observationId);
+  assert.deepEqual(failure,{kind:'api-error',httpStatus:null,errorType:'timeout',attempt:1,delayMs:1000,retry:true});
 });
 test('timeouts and HTTP failures share a three-attempt budget',async()=>{
   let calls=0;const waits=[],failures=[];

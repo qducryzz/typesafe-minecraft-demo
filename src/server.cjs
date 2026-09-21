@@ -1,16 +1,19 @@
-const fs = require('node:fs');
 const path = require('node:path');
 const {trace}=require('./trace.cjs');
+const {createArchive}=require('./archive.cjs');
 const {resolveBotIdentity}=require('./bot-identity.cjs');
 const {createRconConsole,installRconRoutes}=require('./rcon-console.cjs');
 const {randomUUID}=require('node:crypto');
-let activeRunId=null,currentConnectionId=null;
-trace.configure({directory:process.env.TRACE_DIR||path.join(__dirname,'../runtime'),secrets:[process.env.TYPESAFE_API_KEY],context:()=>({runId:activeRunId,connectionId:currentConnectionId})});
+let activeRunId=null,currentConnectionId=null,archive;
+const navigationContexts=new WeakMap();
+const archiveDirectory=process.env.ARCHIVE_DIR||path.join(__dirname,'../runtime');
+trace.configure({directory:process.env.TRACE_DIR||archiveDirectory,secrets:[process.env.TYPESAFE_API_KEY],context:()=>({runId:activeRunId,connectionId:currentConnectionId})});
 trace.event('process.start',{nodeVersion:process.version});
 process.on('uncaughtExceptionMonitor',(error,origin)=>trace.event('process.fatal',{error,origin}));
-process.on('exit',code=>trace.event('process.exit',{code}));
+process.on('exit',code=>{trace.event('process.exit',{code});archive?.close(code);});
 const {username:botUsername}=resolveBotIdentity();
 trace.event('bot.identity',{botUsername,source:'mac'});
+archive=createArchive({directory:archiveDirectory,metadata:{botUsername,nodeVersion:process.version,controlMode:process.env.CONTROL_MODE==='direct'?'direct':'highlevel'}});
 const http = require('node:http');
 const express = require('express');
 const { Server } = require('socket.io');
@@ -45,15 +48,13 @@ const viewers = new Set();
 let bot, ready = false, running = false, generation = 0, controller, activeLoop = null, restarting = false;
 let goal = taskApi.OBJECTIVE, task = null;
 let history = [], latest = null, count = 0, status = 'Waiting for Minecraft';
-fs.mkdirSync(path.join(__dirname,'../runtime'), { recursive: true });
-const logFile = path.join(__dirname, '../runtime', `decisions-${Date.now()}.jsonl`);
 const clients = new Set();
 let connecting = false, connectedPort = mcPortDefault;
 let typesafeKey = String(process.env.TYPESAFE_API_KEY || '').trim();
 let connectGeneration = 0, connectTimer = null;
 const rconConsole=createRconConsole({botUsername,defaultHost:()=>mcHost,isTaskBusy:()=>running||!!activeLoop,onChange:()=>broadcast()});
 function decisionLimit(){ return controlMode==='direct' ? 6000 : scenario.decisionLimit; }
-function snapshot() { return { botUsername,controlMode, decisionLimit:decisionLimit(), scenarios, scenario:scenario.id, actionLabels:Object.fromEntries(Object.keys(actionsFor({scenario:scenario.id,controlMode})).map(k=>[k,k.replaceAll('_',' ')])), camera, restarting, busy:running||!!activeLoop, ready, running, status, goal, count, latest, gameHost:mcHost, gamePort:connectedPort, gameVersion:mcVersion, task:ready&&task?taskApi.progress(bot,task):null, position: ready ? point(bot.entity.position) : null, keyConfigured: !!typesafeKey }; }
+function snapshot() { return { archive:{sessionId:archive.sessionId,files:archive.files},botUsername,controlMode, decisionLimit:decisionLimit(), scenarios, scenario:scenario.id, actionLabels:Object.fromEntries(Object.keys(actionsFor({scenario:scenario.id,controlMode})).map(k=>[k,k.replaceAll('_',' ')])), camera, restarting, busy:running||!!activeLoop, ready, running, status, goal, count, latest, gameHost:mcHost, gamePort:connectedPort, gameVersion:mcVersion, task:ready&&task?taskApi.progress(bot,task):null, position: ready ? point(bot.entity.position) : null, keyConfigured: !!typesafeKey }; }
 function broadcast() { const data = `data: ${JSON.stringify(snapshot())}\n\n`; for (const res of clients) res.write(data); }
 function pause(reason = 'Paused') { trace.event(reason==='Paused'?'task.pause':'task.stop',{reason,count,position:bot?.entity?.position?point(bot.entity.position):null}); running = false; generation++; controller?.abort(); if(bot)lumber.cancel(bot); if(task && reason!=='Paused')task.finishedAt??=Date.now(); status = reason; broadcast(); }
 function allowedOrigin(req) {
@@ -195,7 +196,7 @@ function trackRun(operation){
 }
 async function startRun(token,fresh,buildTest=false){
   if(fresh||!activeRunId)activeRunId=randomUUID();
-  return trace.run({runId:activeRunId,scenario:scenario.id,controlMode:controlMode},async()=>{
+  return trace.run({runId:activeRunId,connectionId:currentConnectionId,scenario:scenario.id,controlMode:controlMode},async()=>{
   trace.event(fresh?'task.start':'task.resume',{generation:token,buildTest,goal});
   try{
     if(fresh){
@@ -226,79 +227,87 @@ async function loop(token) {
       const stop = taskApi.stopReason(progress,task);
       if(stop){if(progress.complete&&scenario.id==='flag'){camera='overview';for(const socket of viewers)socket.data.updateCamera?.();}pause(stop);break;}
       if(bot.health<8)throw new Error('Stopped: health is low');
-      status = 'TypeSafe is deciding'; broadcast();
-      controller = new AbortController();
-      const limit=decisionLimit();
-      const decisionId=randomUUID();
-      const fresh=await trace.run({decisionId},()=>decideFresh({
-        signal:controller.signal,
-        isActive:()=>running&&generation===token&&ready&&count<limit,
-        observe:()=>trace.run({observationId:randomUUID()},()=>trace.span('observation',{},async()=>{
-          let candidates;
-          if(controlMode!=='direct') {
-            status='Checking safe routes';broadcast();
-            candidates=await taskApi.candidates(bot,task,{signal:controller.signal});
-            trace.event('candidates.result',{candidates});
-            if(scenario.id==='lumber')lumber.requireCandidates(candidates,taskApi.progress(bot,task));
-          }
-          const state=observe(bot,goal,history);
-          state.scenario=scenario.id;state.controlMode=controlMode;
-          state.task={...taskApi.progress(bot,task),setupMode:task.setupMode||'normal'};
-          if(controlMode==='direct') state.direct=direct.observeDirect(bot,task);
-          else state.candidates=candidates;
+      const keepGoing=await archive.round(async round=>{
+        const player=bot,roundTask=task,roundApi=taskApi;
+        let draft=null;
+        const currentPosition=()=>player?.entity?.position?point(player.entity.position):null;
+        try {
           status='TypeSafe is deciding';broadcast();
-          trace.event('observation.ready',{state,routeMode:state.controlMode==='direct'?'no-pathfinding':'pathfinder'});
-          return state;
-        })),
-        decide:state=>decide(state,{key:typesafeKey,model:process.env.TYPESAFE_MODEL||'jev-latest',signal:AbortSignal.any([controller.signal,AbortSignal.timeout(10000)])}),
-        position:()=>point(bot.entity.position),
-        onServiceError:record=>{
-          trace.event('request.retry',record);
-          fs.appendFileSync(logFile,JSON.stringify({timestamp:new Date().toISOString(),...record})+'\n');
-          const failure=record.errorType==='timeout'?'TypeSafe request timed out':`TypeSafe HTTP ${record.httpStatus}`;
-          status=record.retry?`${failure}; retrying in ${record.delayMs/1000}s`:`${failure}; retries exhausted`;
-          broadcast();
-        },
-        onDiscard:record=>{
-          trace.event('decision.discarded',record);
-          latest={id:++count,timestamp:new Date().toISOString(),...record,progress:taskApi.progress(bot,task)};
-          fs.appendFileSync(logFile,JSON.stringify(latest)+'\n');
-          status='Skipped stale decision; observing again';broadcast();
+          controller=new AbortController();
+          const limit=decisionLimit();
+          const fresh=await decideFresh({
+            signal:controller.signal,
+            isActive:()=>running&&generation===token&&ready&&bot===player&&count<limit,
+            onCorrelation:ids=>round.correlate(ids),
+            observe:()=>trace.span('observation',{},async()=>{
+              let candidates;
+              if(controlMode!=='direct') {
+                status='Checking safe routes';broadcast();
+                candidates=await roundApi.candidates(player,roundTask,{signal:controller.signal});
+                trace.event('candidates.result',{candidates});
+                if(scenario.id==='lumber')lumber.requireCandidates(candidates,roundApi.progress(player,roundTask));
+              }
+              const state=observe(player,goal,history);
+              state.scenario=scenario.id;state.controlMode=controlMode;
+              state.task={...roundApi.progress(player,roundTask),setupMode:roundTask.setupMode||'normal'};
+              if(controlMode==='direct')state.direct=direct.observeDirect(player,roundTask);
+              else state.candidates=candidates;
+              status='TypeSafe is deciding';broadcast();
+              trace.event('observation.ready',{state,routeMode:state.controlMode==='direct'?'no-pathfinding':'pathfinder'});
+              return state;
+            }),
+            decide:(state,correlation)=>decide(state,{requestId:correlation.requestId,key:typesafeKey,model:process.env.TYPESAFE_MODEL||'jev-latest',signal:AbortSignal.any([controller.signal,AbortSignal.timeout(10000)])}),
+            position:currentPosition,
+            onServiceError:record=>{
+              round.record({...record,recordType:'api-error',status:record.retry?'retrying':'failed'},'request.retry');
+              const failure=record.errorType==='timeout'?'TypeSafe request timed out':'TypeSafe HTTP '+record.httpStatus;
+              status=record.retry?failure+'; retrying in '+record.delayMs/1000+'s':failure+'; retries exhausted';broadcast();
+            },
+            onDiscard:record=>{
+              latest=round.record({...record,id:++count,recordType:'decision',status:'discarded',progress:roundApi.progress(player,roundTask)},'decision.discarded');
+              status='Skipped stale decision; observing again';broadcast();
+            }
+          });
+          if(!fresh)return false;
+          const {state,result,freshness,correlation}=fresh;
+          round.correlate({...correlation,toolId:randomUUID()});
+          trace.event('decision.accepted',{...round.ids,choice:result.answer.choice,freshness});
+          count++;
+          draft={id:count,timestamp:new Date().toISOString(),state,...result,freshness,outcome:'Executing'};
+          latest={sessionId:archive.sessionId,...round.ids,...draft};
+          status='Executing '+result.answer.choice;broadcast();
+          const actionSignal=AbortSignal.any([controller.signal,AbortSignal.timeout(Math.max(1,Math.min(scenario.actionMs,scenario.budgetMs-Date.now()+roundTask.startedAt)))]);
+          const outcome=await trace.run(round.ids,()=>trace.span('tool',{choice:result.answer.choice,position:state.position},async()=>{
+            const context=trace.context();navigationContexts.set(player,context);
+            try{return controlMode==='direct'
+              ?await direct.execute(player,roundTask,result.answer.choice,state.direct,actionSignal)
+              :await roundApi.executeTask(player,roundTask,result.answer.choice,state.candidates,actionSignal);}
+            finally{if(navigationContexts.get(player)===context)navigationContexts.delete(player);}
+          }));
+          const end=currentPosition();
+          draft.outcome=outcome;draft.endPosition=end;
+          draft.distanceMoved=end?+Math.hypot(end.x-state.position.x,end.z-state.position.z).toFixed(2):null;
+          draft.progress=roundApi.progress(player,roundTask);
+          latest=round.finish({...draft,recordType:'decision',status:'completed'});
+          history.push({action:result.answer.choice,outcome,distanceMoved:draft.distanceMoved,position:end});history=history.slice(-12);
+          broadcast();return true;
+        }catch(error){
+          if(draft){
+            const cancelled=generation!==token;
+            draft.outcome=cancelled?'Cancelled':'Stopped: '+error.message;draft.endPosition=currentPosition();
+            try{draft.progress=roundApi.progress(player,roundTask);}catch(snapshotError){draft.progress=null;trace.event('decision.snapshot.error',{...round.ids,error:snapshotError});}
+            latest=round.finish({...draft,recordType:'decision',status:cancelled?'cancelled':'failed',error});
+          }
+          throw error;
         }
-      }));
-      if(!fresh)break;
-      const {state,result,freshness}=fresh;
-      trace.event('decision.accepted',{decisionId,choice:result.answer.choice,freshness});
-      count++;
-      latest = { id:count, timestamp:new Date().toISOString(), state, ...result, freshness, outcome:'Executing' };
-      status = `Executing ${result.answer.choice}`; broadcast();
-      const actionSignal = AbortSignal.any([controller.signal,AbortSignal.timeout(Math.max(1,Math.min(scenario.actionMs,scenario.budgetMs-Date.now()+task.startedAt)))]);
-      const outcome = await trace.run({decisionId,toolId:randomUUID()},()=>trace.span('tool',{choice:result.answer.choice,position:state.position},()=>controlMode==='direct'
-        ? direct.execute(bot,task,result.answer.choice,state.direct,actionSignal)
-        : taskApi.executeTask(bot,task,result.answer.choice,state.candidates,actionSignal)));
-      const end = point(bot.entity.position);
-      const moved = Math.hypot(end.x-state.position.x,end.z-state.position.z);
-      latest.outcome = outcome;
-      latest.endPosition = end;
-      latest.distanceMoved = +moved.toFixed(2);
-      latest.progress = taskApi.progress(bot,task);
-      trace.event('decision.completed',{decisionId,record:latest});
-      history.push({ action:result.answer.choice, outcome, distanceMoved:latest.distanceMoved, position:end });
-      history = history.slice(-12);
-      fs.appendFileSync(logFile,JSON.stringify(latest)+'\n');
-      broadcast();
+      },{isCancelled:()=>generation!==token||!running});
+      if(!keepGoing)break;
       await delay(100);
     }
-    if (generation === token) pause(`Stopped: ${decisionLimit()}-decision limit reached`);
-  } catch (error) {
+    if(generation===token)pause('Stopped: '+decisionLimit()+'-decision limit reached');
+  }catch(error){
     trace.event('task.error',{phase:'loop',error,cancelled:generation!==token});
-    if(latest?.outcome==='Executing') {
-      latest.outcome=generation===token?`Stopped: ${error.message}`:'Cancelled';
-      latest.endPosition=point(bot.entity.position);latest.progress=taskApi.progress(bot,task);
-      fs.appendFileSync(logFile,JSON.stringify(latest)+'\n');
-    }
-    if (generation === token) pause(`Stopped: ${error.message}`);
-    else broadcast();
+    if(generation===token)pause('Stopped: '+error.message);else broadcast();
   }
 }
 
@@ -334,7 +343,7 @@ function connect(gamePort = mcPortDefault, host = mcHost) {
   catch(error){trace.event('connection.error',{connectionId,phase:'create',error});throw error;}
   bot = player;
   for(const event of ['path_update','path_reset','path_stop','goal_reached'])player.on(event,result=>{
-    trace.event('navigation.'+event,{connectionId,result:event==='path_update'?{status:result.status,cost:result.cost,time:result.time,visitedNodes:result.visitedNodes,generatedNodes:result.generatedNodes,path:result.path?.map(p=>({x:p.x,y:p.y,z:p.z,toBreak:p.toBreak,toPlace:p.toPlace}))}:String(result||'')});
+    trace.event('navigation.'+event,{runId:null,decisionId:null,observationId:null,requestId:null,toolId:null,...navigationContexts.get(player),connectionId,result:event==='path_update'?{status:result.status,cost:result.cost,time:result.time,visitedNodes:result.visitedNodes,generatedNodes:result.generatedNodes,path:result.path?.map(p=>({x:p.x,y:p.y,z:p.z,toBreak:p.toBreak,toPlace:p.toPlace}))}:String(result||'')});
   });
   connectTimer = setTimeout(() => {
     if (connectGeneration !== token || bot !== player) return;

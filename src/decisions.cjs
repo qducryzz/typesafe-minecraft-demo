@@ -40,9 +40,9 @@ function validateAnswer(response, allowed = actions) {
   return answer;
 }
 
-async function decide(state, { key, model, signal, fetchImpl = fetch }) {
+async function decide(state, { key, model, signal, fetchImpl = fetch, requestId=trace.context().requestId||randomUUID() }) {
   if (!key) throw new Error('TYPESAFE_API_KEY is missing. Restart using scripts/start-demo.ps1.');
-  return trace.run({requestId:randomUUID()},async()=>{
+  return trace.run({requestId},async()=>{
   const request = requestFor(state, model);
   trace.addSecret(key);
   trace.event('request.sent',{request});

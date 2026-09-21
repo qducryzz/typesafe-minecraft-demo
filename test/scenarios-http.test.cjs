@@ -4,10 +4,12 @@ const {spawn}=require('node:child_process');
 const {once}=require('node:events');
 const net=require('node:net');
 const path=require('node:path');
+const fs=require('node:fs'),os=require('node:os');
 test('scenario API switches both ways, resets displayed state and rejects unavailable tasks',async t=>{
  const reservation=net.createServer();reservation.listen(0,'127.0.0.1');await once(reservation,'listening');const port=reservation.address().port;await new Promise(r=>reservation.close(r));
- const child=spawn(process.execPath,['src/server.cjs'],{cwd:path.resolve(__dirname,'..'),env:{...process.env,PORT:String(port),TYPESAFE_API_KEY:'',CONTROL_MODE:'highlevel',MC_AUTOCONNECT:'0'},windowsHide:true,stdio:['ignore','pipe','pipe']});
- t.after(()=>{child.kill();});
+ const directory=fs.mkdtempSync(path.join(os.tmpdir(),'scenario-archive-'));
+ const child=spawn(process.execPath,['src/server.cjs'],{cwd:path.resolve(__dirname,'..'),env:{...process.env,PORT:String(port),BIND:'127.0.0.1',ARCHIVE_DIR:directory,TRACE_DIR:directory,TYPESAFE_API_KEY:'',CONTROL_MODE:'highlevel',MC_AUTOCONNECT:'0'},windowsHide:true,stdio:['ignore','pipe','pipe']});
+ t.after(async()=>{if(child.exitCode===null&&child.signalCode===null){const exited=once(child,'exit');child.kill();await exited;}fs.rmSync(directory,{recursive:true,force:true});});
  await Promise.race([once(child.stdout,'data'),once(child,'exit').then(()=>{throw new Error('Test server exited before listening');}),new Promise((_,reject)=>{const timer=setTimeout(()=>reject(new Error('Test server startup timed out')),10000);timer.unref();})]);
  const post=async body=>{const response=await fetch(`http://127.0.0.1:${port}/api/scenario`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});return {status:response.status,body:await response.json()};};
  const flag=await post({scenario:'flag'});assert.equal(flag.status,200);assert.equal(flag.body.scenario,'flag');assert.equal(flag.body.controlMode,'highlevel');assert.ok(flag.body.actionLabels.mine_red_wool);assert.equal(flag.body.actionLabels.forward,undefined);assert.equal(flag.body.latest,null);assert.equal(flag.body.count,0);
